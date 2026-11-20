@@ -53,7 +53,7 @@ public class HubTransportPlugin extends Plugin {
     @PluginMethod public void httpRead(PluginCall call) { perform(call,()->{ JSObject result=new JSObject(); result.put("data",Base64.toBase64String(transport.httpRead(text(call,"id")))); return result; }); }
     @PluginMethod public void socketOpen(PluginCall call) {
         if(!hasListeners("socket")) { if(transport!=null) transport.cancel(call.getString("id")); call.reject("native_socket_listener_required"); return; }
-        perform(call,()->{ transport.socketOpen(text(call,"id"),text(call,"origin"),call.getString("hubKey"),call.getString("certificateAuthority")); return new JSObject(); });
+        perform(call,()->{ transport.socketOpen(text(call,"id"),text(call,"origin"),call.getString("hubKey"),call.getString("certificateAuthority"),Boolean.TRUE.equals(call.getBoolean("ipv6Http"))); return new JSObject(); });
     }
     @PluginMethod public void socketSend(PluginCall call) { complete(call,()->{ transport.socketSend(text(call,"id"),text(call,"text")); return new JSObject(); }); }
     @PluginMethod public void socketAck(PluginCall call) { complete(call,()->{ Double sequence=call.getDouble("sequence"); if(sequence==null || sequence<0 || sequence>9007199254740991d || sequence!=Math.floor(sequence)) throw new IOException("invalid_socket_receipt"); transport.socketAck(text(call,"id"),sequence.longValue()); return new JSObject(); }); }

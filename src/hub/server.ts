@@ -141,7 +141,7 @@ function gatewayWorkbenchMetadata<T extends { workbench?: WorkbenchContext }>(me
 type BotConnection = { designOpen: boolean; nativeInput: boolean; nativeReviewInput: boolean; engineTasks: boolean; piSession: boolean; ws: WebSocket; botId: string; queueCapable: boolean; queuePull: boolean; queueAdvertised: boolean; botMessages: boolean; agentBus: boolean; groupDiscussion: boolean; voicePolicy: boolean; widgetPolicy: boolean; replayQueue: boolean; ready: boolean };
 type Rpc = { resolve: (value: Json) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; ws: WebSocket };
 export interface HubTlsListener { exposure?: ListenerExposure; host: string; port: number; tls: TlsOptions; managed?: boolean }
-export interface HubServerOptions { voiceSettings?: HubVoiceSettings; asrSetup?: QwenAsrSetup; /** Internal lease duration override for isolated tests. */ drainLeaseMs?: number; relaySources?: RelaySources; exposure?: ListenerExposure; maxFileBytes?: number; managedBots?: BotManagerOptions; stateDir: string; host?: string; port?: number; tls?: TlsOptions; instancePort?: number; tlsListeners?: HubTlsListener[]; ipv6Ddns?: { url: string; tls: TlsOptions }; push?: PushConfig; origins?: string[]; clientDir?: string; googleDocs?: () => Promise<GoogleDocs>; onWarning?: (code: string) => void; networkExchange?: typeof exchangeNetworkPeer }
+export interface HubServerOptions { voiceSettings?: HubVoiceSettings; asrSetup?: QwenAsrSetup; /** Internal lease duration override for isolated tests. */ drainLeaseMs?: number; relaySources?: RelaySources; exposure?: ListenerExposure; maxFileBytes?: number; managedBots?: BotManagerOptions; stateDir: string; host?: string; port?: number; tls?: TlsOptions; instancePort?: number; tlsListeners?: HubTlsListener[]; ipv6Ddns?: { url: string; tls?: TlsOptions; allowPlainHttp?: true }; push?: PushConfig; origins?: string[]; clientDir?: string; googleDocs?: () => Promise<GoogleDocs>; onWarning?: (code: string) => void; networkExchange?: typeof exchangeNetworkPeer }
 export class HubServer {
   private readonly relaySources: RelaySources;
   private readonly fragmentSockets = new WeakSet<WebSocket>();
@@ -386,9 +386,11 @@ export class HubServer {
     if (options.tls) this.attachListener(createServer(), "127.0.0.1", options.instancePort ?? 0, false, true);
     for (const listener of options.tlsListeners ?? []) this.attachListener(createTlsServer(listener.tls), listener.host, listener.port, true, false, listener.exposure, listener.managed, listener.managed ? certificateAuthorityFromChain(listener.tls.cert) : undefined);
     if (options.ipv6Ddns) {
-      const { url, tls } = options.ipv6Ddns;
-      const port = Number(new URL(url).port || 443);
-      this.attachListener(createTlsServer(tls), "::", port, true, false, "public", false, undefined, url);
+      const { url, tls, allowPlainHttp } = options.ipv6Ddns;
+      const origin = new URL(url);
+      if (tls ? origin.protocol !== "https:" : origin.protocol !== "http:" || !allowPlainHttp) throw new Error("invalid_ipv6_ddns_listener");
+      const port = Number(origin.port || (tls ? 443 : 80));
+      this.attachListener(tls ? createTlsServer(tls) : createServer(), "::", port, !!tls, false, "public", false, undefined, origin.origin);
     }
     this.disposers.push(store.subscribe((event) => {
       this.trackTask(this.broadcast(event).catch(() => options.onWarning?.("broadcast_failed")));
@@ -416,7 +418,9 @@ export class HubServer {
     }, 500); sweep.unref(); this.disposers.push(() => clearInterval(sweep));
   }
   private attachListener(server: Server, host: string, port: number, tls: boolean, instance: boolean, exposure?: ListenerExposure, managed = false, authority?: string, ipv6Ddns?: string): void {
-    assertSafeBind(host, tls, exposure);
+    // The dedicated IPv6 DDNS listener can opt in to HTTP. It never exposes the
+    // separate instance API and the generic public-listener rules stay intact.
+    if (!(ipv6Ddns && !tls && host === "::" && !instance && !managed && exposure === "public")) assertSafeBind(host, tls, exposure);
     this.listeners.push({ server, host, port, tls, instance, managed, authority, ipv6Ddns });
     server.on("connection", (socket) => {
       this.connections.add(socket);
@@ -1754,7 +1758,7 @@ export class HubServer {
         await reply(200, await this.hostRoutes.view(validateInQueue)); return;
       }
       if (route === HOST_ROUTES_PATH && req.method === "GET") {
-        await requireOwner(); await reply(200, await this.hostRoutes.view(validateInQueue)); return;
+        await requireOwner(); await reply(200, await this.hostRoutes.view(validateInQueue, url.searchParams.get("ipv6Http") === "1")); return;
       }
       if (route === "/api/network/manage" && req.method === "POST") {
         await requireOwner();

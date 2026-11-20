@@ -87,7 +87,8 @@ export async function runHubCli(argv: string[]): Promise<void> {
     const config = await readHubConfig(directory);
     const ipv6Ddns = config.ipv6Ddns && {
       url: config.ipv6Ddns.url,
-      tls: await loadIpv6DdnsTls(directory, config.ipv6Ddns.url, config.ipv6Ddns.tls),
+      tls: config.ipv6Ddns.tls && await loadIpv6DdnsTls(directory, config.ipv6Ddns.url, config.ipv6Ddns.tls),
+      allowPlainHttp: config.ipv6Ddns.allowPlainHttp,
     };
     const relaySources = new RelaySources();
     const relay = await RelayTunnels.load({ ...config, host: args.values.host ?? config.host, port: args.values.port ? z.coerce.number().int().min(1).max(65535).parse(args.values.port) : config.port }, (code) => console.error(`[${new Date().toISOString()}] Hub relay: ${code}`), relaySources);

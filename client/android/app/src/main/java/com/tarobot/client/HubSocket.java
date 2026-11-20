@@ -137,7 +137,7 @@ final class HubSocket extends WebSocketClient {
         this(route,listener,deadlines,new BoundedDraft());
     }
     private HubSocket(HubTls.Route route, Listener listener, ScheduledExecutorService deadlines, BoundedDraft draft) {
-        super(URI.create(route.base.newBuilder().encodedPath("/ws").build().toString().replaceFirst("^https:","wss:")),draft);
+        super(URI.create(route.base.newBuilder().encodedPath("/ws").build().toString().replaceFirst("^https?:", route.base.isHttps() ? "wss:" : "ws:")),draft);
         this.route=route; this.listener=listener; this.deadlines=deadlines; this.receipt=draft.receipt;
         setProxy(Proxy.NO_PROXY); setConnectionLostTimeout(0); setDaemon(true);
     }
@@ -159,16 +159,10 @@ final class HubSocket extends WebSocketClient {
                 catch(IOException error) { connectionFailure=error; attempt.close(); }
             }
             if(raw==null) throw connectionFailure!=null?connectionFailure:new IOException("native_socket_connect_timeout");
-            SSLSocket tls=(SSLSocket)route.client.sslSocketFactory().createSocket(raw,route.base.host(),route.base.port(),true); attach(tls);
-            List<String> protocols=new ArrayList<>(); for(String protocol:tls.getSupportedProtocols()) if(protocol.equals("TLSv1.2") || protocol.equals("TLSv1.3")) protocols.add(protocol);
-            tls.setEnabledProtocols(protocols.toArray(new String[0]));
-            SSLParameters parameters=tls.getSSLParameters(); parameters.setEndpointIdentificationAlgorithm("HTTPS"); tls.setSSLParameters(parameters);
-            tls.setSoTimeout(5000); tls.startHandshake();
-            if(!route.client.hostnameVerifier().verify(route.base.host(),tls.getSession())) throw new javax.net.ssl.SSLPeerUnverifiedException("native_tls_host_mismatch");
-            // Supply an already verified, connected socket through the public
-            // factory API. The library does not create another TLS connection.
+            Socket connected = route.base.isHttps() ? connectTls(raw) : raw;
+            // Supply the connected socket through the public factory API.
             setSocketFactory(new SocketFactory() {
-                public Socket createSocket() throws IOException { synchronized(lifecycle) { if(cancelled) throw new IOException("native_request_cancelled"); return new VerifiedStreamSocket(tls); } }
+                public Socket createSocket() throws IOException { synchronized(lifecycle) { if(cancelled) throw new IOException("native_request_cancelled"); return new TrackedStreamSocket(connected); } }
                 public Socket createSocket(String h,int p) throws IOException { throw new IOException("unsupported_socket_creation"); }
                 public Socket createSocket(String h,int p,InetAddress l,int q) throws IOException { throw new IOException("unsupported_socket_creation"); }
                 public Socket createSocket(InetAddress h,int p) throws IOException { throw new IOException("unsupported_socket_creation"); }
@@ -176,6 +170,24 @@ final class HubSocket extends WebSocketClient {
             });
             synchronized(lifecycle) { if(!cancelled) connect(); }
         } catch(Exception error) { fail(error,false); releaseTls(); }
+    }
+    private SSLSocket connectTls(Socket raw) throws IOException {
+        SSLSocket tls = (SSLSocket)route.client.sslSocketFactory().createSocket(raw, route.base.host(), route.base.port(), true);
+        attach(tls);
+        List<String> protocols = new ArrayList<>();
+        for (String protocol : tls.getSupportedProtocols()) {
+            if (protocol.equals("TLSv1.2") || protocol.equals("TLSv1.3")) protocols.add(protocol);
+        }
+        tls.setEnabledProtocols(protocols.toArray(new String[0]));
+        SSLParameters parameters = tls.getSSLParameters();
+        parameters.setEndpointIdentificationAlgorithm("HTTPS");
+        tls.setSSLParameters(parameters);
+        tls.setSoTimeout(5000);
+        tls.startHandshake();
+        if (!route.client.hostnameVerifier().verify(route.base.host(), tls.getSession())) {
+            throw new javax.net.ssl.SSLPeerUnverifiedException("native_tls_host_mismatch");
+        }
+        return tls;
     }
     void cancel() {
         Socket socket;
@@ -187,15 +199,13 @@ final class HubSocket extends WebSocketClient {
     // TLS writer. Abort its underlying TCP socket first; control must not wait
     // for a peer that stopped reading. TLS disposal runs on the IO callback.
     private void releaseTls() { Socket socket=wire; if(socket!=null) try { socket.close(); } catch(IOException | RuntimeException ignored) { } }
-    /** TLS is fully established and verified before this adapter is handed to
-     * the RFC 6455 library. It exposes only that SSLSocket's encrypted streams.
-     * Observe the writer's flush so clean means BOTH a received peer Close and
+    /** Observe the writer's flush so clean means BOTH a received peer Close and
      * a written local Close, even when the peer stops consuming our data. */
-    private final class VerifiedStreamSocket extends Socket {
-        final SSLSocket tls;
+    private final class TrackedStreamSocket extends Socket {
+        final Socket connected;
         final OutputStream output;
-        VerifiedStreamSocket(SSLSocket tls) throws IOException {
-            this.tls=tls; OutputStream target=tls.getOutputStream();
+        TrackedStreamSocket(Socket connected) throws IOException {
+            this.connected=connected; OutputStream target=connected.getOutputStream();
             output=new OutputStream() {
                 boolean pendingClose;
                 public void write(int b) throws IOException { target.write(b); }
@@ -211,19 +221,19 @@ final class HubSocket extends WebSocketClient {
                 }
             };
         }
-        @Override public InputStream getInputStream() throws IOException { return tls.getInputStream(); }
+        @Override public InputStream getInputStream() throws IOException { return connected.getInputStream(); }
         @Override public OutputStream getOutputStream() { return output; }
-        @Override public boolean isConnected() { return tls.isConnected(); }
-        @Override public boolean isClosed() { return cancelled || tls.isClosed(); }
+        @Override public boolean isConnected() { return connected.isConnected(); }
+        @Override public boolean isClosed() { return cancelled || connected.isClosed(); }
         @Override public void close() { cancel(); releaseTls(); }
-        @Override public void setTcpNoDelay(boolean value) throws SocketException { tls.setTcpNoDelay(value); }
-        @Override public void setReuseAddress(boolean value) throws SocketException { tls.setReuseAddress(value); }
-        @Override public InetAddress getInetAddress() { return tls.getInetAddress(); }
-        @Override public InetAddress getLocalAddress() { return tls.getLocalAddress(); }
-        @Override public int getPort() { return tls.getPort(); }
-        @Override public int getLocalPort() { return tls.getLocalPort(); }
-        @Override public SocketAddress getRemoteSocketAddress() { return tls.getRemoteSocketAddress(); }
-        @Override public SocketAddress getLocalSocketAddress() { return tls.getLocalSocketAddress(); }
+        @Override public void setTcpNoDelay(boolean value) throws SocketException { connected.setTcpNoDelay(value); }
+        @Override public void setReuseAddress(boolean value) throws SocketException { connected.setReuseAddress(value); }
+        @Override public InetAddress getInetAddress() { return connected.getInetAddress(); }
+        @Override public InetAddress getLocalAddress() { return connected.getLocalAddress(); }
+        @Override public int getPort() { return connected.getPort(); }
+        @Override public int getLocalPort() { return connected.getLocalPort(); }
+        @Override public SocketAddress getRemoteSocketAddress() { return connected.getRemoteSocketAddress(); }
+        @Override public SocketAddress getLocalSocketAddress() { return connected.getLocalSocketAddress(); }
     }
     private void finishClose() {
         boolean clean;

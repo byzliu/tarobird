@@ -1,7 +1,6 @@
 import { routesSchema, deploymentSchema, deploymentMatchesRoutes, type Deployment } from "../../src/client-protocol/routes.js";
 import { z } from "zod";
 import { t } from "./i18n.js";
-import { validateRoute } from "./identity.js";
 import type { Route } from "./storage.js";
 
 // Pairing data is shared by UI and transport tests; it must not load dialogs or CSS.
@@ -38,7 +37,6 @@ export function parsePairingLink(value: string): PairingPayload {
   try {
     if ([...url.searchParams.keys()].some(key => key !== "data" && key !== "invite") || url.searchParams.getAll("data").length !== 1 || url.searchParams.getAll("invite").length > 1) throw new Error("invalid_pairing_query");
     const payload = payloadSchema.parse(JSON.parse(url.searchParams.get("data") ?? "{}"));
-    if (payload.kind === "connect") payload.routes = payload.routes.map((r): Route => ({ ...r, url: validateRoute(r.url) }));
     const invite = url.searchParams.get("invite");
     if (invite !== null && payload.kind !== "connect") throw new Error("invalid_pairing_invite");
     return invite === null || payload.kind !== "connect" ? payload : { ...payload, invite: inviteSchema.parse(invite) };

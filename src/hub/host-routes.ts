@@ -222,7 +222,7 @@ export class HostRoutes {
     }
   }
   /** Owner-scoped disclosure of this host's own routes; not an authorization. */
-  async view(validate?: () => Promise<unknown>): Promise<HostRoutesView> {
+  async view(validate?: () => Promise<unknown>, includeIpv6Http = false): Promise<HostRoutesView> {
     const shared = await this.options.network.sharedRoutes(validate);
     const record = await this.options.store.db.serial(() => this.read());
     const listeners = this.options.listeners(), enabled = await this.enabled(listeners);
@@ -234,7 +234,7 @@ export class HostRoutes {
       if (enabled[mode] && entry && !routes.some(item => item.route.url === entry.route.url)) routes.push({ source: "managed", route: entry.route });
     }
     const ddns = this.options.ipv6Ddns?.();
-    if (ddns) {
+    if (ddns && (includeIpv6Http || ddns.startsWith("https:"))) {
       const entry = { source: "managed" as const, route: { name: "Direct" as const, label: IPV6_DDNS_LABEL, url: ddns } };
       const sameOrigin = routes.findIndex(item => item.route.url === ddns);
       if (sameOrigin < 0) routes.push(entry);

@@ -132,8 +132,8 @@ fn verify_proof(bytes: &[u8], key: &str, nonce: &str, observed: &[u8]) -> Result
     Ok(fingerprint)
 }
 
-pub fn origin(raw: &str) -> Result<Url, String> {
-    let mut url = Url::parse(raw).map_err(|_| "invalid_hub_origin")?;
+fn parse_origin(raw: &str) -> Result<Url, String> {
+    let url = Url::parse(raw).map_err(|_| "invalid_hub_origin")?;
     if raw.len() > 2048
         || !url.username().is_empty()
         || url.password().is_some()
@@ -143,6 +143,11 @@ pub fn origin(raw: &str) -> Result<Url, String> {
     {
         return Err("invalid_hub_origin".into());
     }
+    Ok(url)
+}
+
+pub fn origin(raw: &str) -> Result<Url, String> {
+    let mut url = parse_origin(raw)?;
     if url.scheme() == "http" {
         if url.host_str() == Some("localhost") {
             url.set_host(Some("127.0.0.1"))
@@ -224,7 +229,26 @@ impl Network {
         };
         network.prepare(raw, key).await
     }
-    fn client(&self, pin: Option<[u8; 32]>) -> Result<Client, String> {
+    pub async fn prepare_desktop_route(&self, raw: &str, key: Option<&str>, ca: Option<&str>, ipv6_http: bool) -> Result<VerifiedRoute, String> {
+        if !ipv6_http { return self.prepare_with_ca(raw, key, ca).await; }
+        let base = parse_origin(raw)?;
+        let host = base.domain().ok_or("invalid_hub_origin")?;
+        let port = base.port_or_known_default().filter(|port| *port != 0).ok_or("invalid_hub_origin")?;
+        if base.scheme() != "http" || ca.is_some() || !host.contains('.') || host.ends_with(".localhost") {
+            return Err("invalid_hub_origin".into());
+        }
+        hub_key(key.ok_or("trusted_hub_key_required")?)?;
+        let addresses = tokio::time::timeout(Duration::from_secs(5), tokio::net::lookup_host((host, port)))
+            .await.map_err(|_| "native_socket_connect_timeout")?.map_err(|_| "native_socket_failed")?
+            .filter(|address| matches!(address.ip(), std::net::IpAddr::V6(ip) if ip.segments()[0] & 0xe000 == 0x2000))
+            .collect::<Vec<_>>();
+        if addresses.is_empty() { return Err("ipv6_dns_address_required".into()); }
+        let client = self.client_builder(None)?.resolve_to_addrs(host, &addresses).build()
+            .map_err(|_| "native_transport_unavailable")?;
+        Ok(VerifiedRoute { client, base, created: Instant::now() })
+    }
+
+    fn client_builder(&self, pin: Option<[u8; 32]>) -> Result<reqwest::ClientBuilder, String> {
         let verifier: Arc<dyn ServerCertVerifier> = match pin {
             Some(leaf) => Arc::new(PinnedVerifier {
                 normal: self.normal.clone(),
@@ -243,16 +267,17 @@ impl Network {
         // Every new physical connection presents and verifies its certificate.
         // rustls rejects TLS renegotiation; pooled connections retain their pin.
         tls.resumption = rustls::client::Resumption::disabled();
-        Client::builder()
+        Ok(Client::builder()
             .tls_backend_preconfigured(tls)
             .tls_info(true)
             .http1_only()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60))
-            .build()
-            .map_err(|_| "native_transport_unavailable".into())
+            .pool_idle_timeout(Duration::from_secs(60)))
+    }
+    fn client(&self, pin: Option<[u8; 32]>) -> Result<Client, String> {
+        self.client_builder(pin)?.build().map_err(|_| "native_transport_unavailable".into())
     }
     pub async fn prepare(&self, raw: &str, key: Option<&str>) -> Result<VerifiedRoute, String> {
         let base = origin(raw)?;

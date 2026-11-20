@@ -1,6 +1,6 @@
 import { createHash, verify } from "node:crypto";
 import { networkCanonical, networkCommandSchema, networkCommandResultSchema, networkGenesisText, networkManifestProof, networkMemberText, networkProposalProof, networkViewSchema, signedNetworkManifestSchema, signedNetworkProposalSchema, type NetworkCommand, type NetworkCommandResult, type NetworkView, type SignedNetworkManifest, type SignedNetworkProposal } from "../client-protocol/private-network.js";
-import { HOST_ROUTES_CAPABILITY, HOST_ROUTES_PATH, HOST_LAN_SELECTION_CAPABILITY, HOST_LAN_SELECTION_PATH, managedLanSelectionSchema, hostRoutesViewSchema, type HostRoutesView } from "../client-protocol/host-routes.js";
+import { HOST_ROUTES_CAPABILITY, HOST_ROUTES_PATH, HOST_INVITE_ROUTES_PATH, HOST_LAN_SELECTION_CAPABILITY, HOST_LAN_SELECTION_PATH, managedLanSelectionSchema, hostRoutesViewSchema, type HostRoutesView } from "../client-protocol/host-routes.js";
 import { hashSecret, parsePublicKey } from "../hub/auth.js";
 import { HostCliError, LocalHostClient } from "./client.js";
 
@@ -41,9 +41,9 @@ export class HostNetwork {
   }
   async view(): Promise<NetworkView> { return this.verifyView(await this.client.request("/api/network")); }
   /** Read-only: the same owner-scoped endpoint the App uses for self-route sync. */
-  async localRoutes(): Promise<HostRoutesView> {
+  async localRoutes(includeIpv6Http = false): Promise<HostRoutesView> {
     if (!this.client.ready.serverCapabilities.includes(HOST_ROUTES_CAPABILITY)) throw new HostCliError("host_routes_update_required");
-    const view = hostRoutesViewSchema.parse(await this.client.request(HOST_ROUTES_PATH));
+    const view = hostRoutesViewSchema.parse(await this.client.request(includeIpv6Http ? HOST_INVITE_ROUTES_PATH : HOST_ROUTES_PATH));
     if (view.hostPublicKey !== this.client.publicKey) throw new HostCliError("network_host_mismatch");
     return view;
   }

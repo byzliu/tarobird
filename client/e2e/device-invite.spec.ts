@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ViteDevServer } from "vite";
 import { desktopTls } from "../../src/hub/desktop-tls.js";
-import { HOST_ROUTES_PATH } from "../../src/client-protocol/host-routes.js";
+import { HOST_INVITE_ROUTES_PATH as HOST_ROUTES_PATH } from "../../src/client-protocol/host-routes.js";
 import { isLoopbackOrUnspecified } from "../../src/client-protocol/loopback-address.js";
 import { IPV6_DDNS_LABEL } from "../../src/client-protocol/routes.js";
 import { parsePairingLink, type PairingPayload } from "../src/pairing-link.js";

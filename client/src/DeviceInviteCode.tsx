@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { HOST_ROUTES_PATH, hostRoutesViewSchema } from "../../src/client-protocol/host-routes.js";
+import { HOST_INVITE_ROUTES_PATH, hostRoutesViewSchema } from "../../src/client-protocol/host-routes.js";
 import { isLoopbackOrUnspecified } from "../../src/client-protocol/loopback-address.js";
-import { IPV6_DDNS_LABEL, isIpv6DdnsRoute, MAX_VPS_ROUTES } from "../../src/client-protocol/routes.js";
+import { IPV6_DDNS_LABEL, isIpv6DdnsRoute, isIpv6HttpRoute, MAX_VPS_ROUTES } from "../../src/client-protocol/routes.js";
 import type { HubConnection } from "./connection.js";
 import type { Route } from "./storage.js";
 import { anySignal, timeoutSignal } from "./abort-signals.js";
@@ -28,7 +28,7 @@ export function DeviceInviteCode({ connection, localHost, busyChange }: { connec
     setPrepared(previous => previous?.key === key ? previous : undefined);
     if (!available) return;
     const abort = new AbortController();
-    void connection.http(HOST_ROUTES_PATH, { signal: anySignal([abort.signal, timeoutSignal(8000)]) }).then(raw => {
+    void connection.http(HOST_INVITE_ROUTES_PATH, { signal: anySignal([abort.signal, timeoutSignal(8000)]) }).then(raw => {
       const view = hostRoutesViewSchema.parse(raw);
       if (view.hostPublicKey !== key) throw new Error("invite_host_mismatch");
       const unavailableNames: Route["name"][] = [];
@@ -43,7 +43,7 @@ export function DeviceInviteCode({ connection, localHost, busyChange }: { connec
   const saved = read?.key === key ? [...read.routes, ...connection.identity.routes.filter(route => route.name === "VPS" && !read.routes.some(other => other.url === route.url))] : available ? [] : connection.identity.routes;
   const source = prepared?.key === key ? [prepared.route, ...saved.filter(route => route.url !== prepared.route.url)] : saved;
   const routes = source.filter(route => {
-    try { const url = new URL(route.url); return url.protocol === "https:" && !isLoopbackOrUnspecified(url.hostname); }
+    try { const url = new URL(route.url); return (url.protocol === "https:" || isIpv6HttpRoute(route)) && !isLoopbackOrUnspecified(url.hostname); }
     catch { return false; }
   });
   const directs = routes.filter(route => route.name !== "VPS");
@@ -53,7 +53,7 @@ export function DeviceInviteCode({ connection, localHost, busyChange }: { connec
   const usable = choices.filter(route => isIpv6DdnsRoute(route) || prepared?.key === key && route.url === prepared.route.url || !(read?.key === key && read.unavailableNames?.includes(route.name)));
   const defaults = usable.length ? usable : choices;
   const chosen = choices.find(route => route.url === selected) ?? defaults.find(route => route.url === state.route?.url) ?? (localHost ? defaults.find(route => route.name === "Direct" && !isIpv6DdnsRoute(route)) : undefined) ?? defaults.find(route => route.name === "Tailscale") ?? defaults[0];
-  const title = (route: Route) => isIpv6DdnsRoute(route) ? IPV6_DDNS_LABEL : route.name === "Tailscale" ? t("Tailscale") : route.name === "VPS" ? t("VPS 中转") : t("同一局域网");
+  const title = (route: Route) => isIpv6HttpRoute(route) ? `${IPV6_DDNS_LABEL} · HTTP` : isIpv6DdnsRoute(route) ? IPV6_DDNS_LABEL : route.name === "Tailscale" ? t("Tailscale") : route.name === "VPS" ? t("VPS 中转") : t("同一局域网");
   if (configure) return <div className="device-invite"><button type="button" disabled={preparing} onClick={() => { setConfigure(false); setRetry(value => value + 1); }}>{t("返回连接二维码")}</button><DesktopHostInvite compact connection={connection} hubKey={key} busyChange={setPreparing} onReady={(route, unavailableRouteCount) => { setPrepared({ key, route, unavailableRouteCount }); setSelected(route.url); setConfigure(false); }}/></div>;
   // The host's own report stays visible, next to the network choice it concerns.
   const unavailableWarning = !prepared && read?.key === key && read.unavailable && <p role="alert" className="settings-warning">{t("主机报告本地线路当前不可用。请检查网络后重新生成，或选择其他可用连接方式。")}</p>;
@@ -63,6 +63,7 @@ export function DeviceInviteCode({ connection, localHost, busyChange }: { connec
     {loading ? <p role="status">{t("正在读取可用的连接二维码…")}</p> : failed ? <div role="alert"><p>{t("未能读取主机的连接信息，请重试。现有连接不会改变。")}</p><button type="button" onClick={() => setRetry(value => value + 1)}>{t("重试")}</button></div> : chosen ? <>
       <div className="device-invite-route">{choices.length > 1 ? <label>{t("新设备通过什么网络连接？")}<select value={chosen.url} onChange={event => setSelected(event.target.value)}>{choices.map(route => <option key={route.url} value={route.url}>{title(route)}{choices.filter(other => title(other) === title(route)).length > 1 ? ` · ${new URL(route.url).hostname}` : ""}</option>)}</select></label> : <strong>{title(chosen)}</strong>}{unavailableWarning}</div>
       <ConnectionInviteCode connection={connection} payload={connectionPairingPayload(key, chosen.name === "VPS" ? relays : [chosen, ...relays], connection.identity.deployment, chosen.url)}/>
+      {isIpv6HttpRoute(chosen) && <p className="settings-warning">{t("这条公网 HTTP 线路会明文传输数据。")}</p>}
       <p className="settings-note device-invite-note">{isIpv6DdnsRoute(chosen) ? t("新设备的网络需要支持 IPv6。") : chosen.name === "Tailscale" ? t("新设备和主机都需开启 Tailscale，并允许互相访问。") : chosen.name === "VPS" ? t("新设备联网即可通过已配置的中转连接主机。") : t("新设备与主机需连接同一 Wi-Fi 或局域网。")} {t("扫码后仍需核对 8 位配对码并确认，才会授权新设备。")}</p>
     </> : <>
       {unavailableWarning}

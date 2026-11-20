@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { HOST_ROUTES_PATH, hostRoutesViewSchema, type HostRoutesView } from "../../src/client-protocol/host-routes.js";
+import { HOST_INVITE_ROUTES_PATH, hostRoutesViewSchema, type HostRoutesView } from "../../src/client-protocol/host-routes.js";
 import { IPV6_DDNS_LABEL, isIpv6DdnsRoute, type Route } from "../../src/client-protocol/routes.js";
 import type { HubConnection } from "./connection.js";
 import { t } from "./i18n.js";
@@ -13,7 +13,7 @@ export function useHostRoutesView(connection: HubConnection): HostRoutesView | u
     setView(undefined);
     if (!available) return;
     const controller = new AbortController();
-    void connection.http(HOST_ROUTES_PATH, { signal: controller.signal }).then(raw => {
+    void connection.http(HOST_INVITE_ROUTES_PATH, { signal: controller.signal }).then(raw => {
       const result = hostRoutesViewSchema.parse(raw);
       if (!controller.signal.aborted && result.hostPublicKey === key) setView(result);
     }).catch(() => undefined);

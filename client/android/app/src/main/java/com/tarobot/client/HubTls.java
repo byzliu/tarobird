@@ -3,8 +3,11 @@ package com.tarobot.client;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.Proxy;
 import java.net.Socket;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import java.security.MessageDigest;
@@ -12,6 +15,7 @@ import java.security.SecureRandom;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -25,6 +29,8 @@ import javax.net.ssl.X509TrustManager;
 import javax.net.ssl.X509ExtendedTrustManager;
 import okhttp3.Call;
 import okhttp3.ConnectionPool;
+import okhttp3.ConnectionSpec;
+import okhttp3.Dns;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
@@ -36,7 +42,7 @@ import org.bouncycastle.util.encoders.Base64;
 import org.bouncycastle.util.encoders.Hex;
 import org.json.JSONObject;
 
-/** Native TLS only. Bootstrap never carries a device identity or credential.
+/** Native Hub transport. HTTPS bootstrap never carries a device identity or credential.
  * Every pinned route owns its SSLContext and connection pool; session resumption
  * cannot cross a route/Hub identity/pin generation. Normal PKI checks remain on; QR-provided roots are route-scoped.
  * This class deliberately has no Android dependencies, so real TLS adversarial
@@ -69,13 +75,19 @@ final class HubTls implements AutoCloseable {
         throw new IOException("system_tls_unavailable");
     }
     static HttpUrl origin(String raw) throws IOException {
+        return origin(raw, false);
+    }
+    private static HttpUrl origin(String raw, boolean ipv6Http) throws IOException {
         if (raw == null || raw.length() > 2048 || raw.indexOf('\\') >= 0) throw new IOException("invalid_hub_origin");
         HttpUrl url;
         try { url = HttpUrl.get(raw); } catch (IllegalArgumentException error) { throw new IOException("invalid_hub_origin"); }
         if (!url.username().isEmpty() || !url.password().isEmpty() || !url.encodedPath().equals("/") || url.query() != null || url.fragment() != null) throw new IOException("invalid_hub_origin");
-        // Android loopback is shared by other applications. This client has no
-        // on-device Hub; neither release nor development APKs bypass TLS here.
-        if (!url.scheme().equals("https")) throw new IOException("https_required");
+        if (ipv6Http) {
+            String host = url.host();
+            if (!url.scheme().equals("http") || url.port() == 0 || !host.contains(".")
+                || host.endsWith(".localhost") || host.matches("[0-9.]+") || host.contains(":"))
+                throw new IOException("invalid_hub_origin");
+        } else if (!url.scheme().equals("https")) throw new IOException("https_required");
         return url;
     }
     static HttpUrl target(HttpUrl base, String path) throws IOException {
@@ -154,10 +166,25 @@ final class HubTls implements AutoCloseable {
                 // must stay disabled so an uncertain POST is never replayed.
                 .protocols(Collections.singletonList(Protocol.HTTP_1_1)).connectionPool(new ConnectionPool(4,4,TimeUnit.SECONDS))
                 .connectTimeout(5,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).writeTimeout(30,TimeUnit.SECONDS);
+            if (!base.isHttps()) builder.connectionSpecs(Collections.singletonList(ConnectionSpec.CLEARTEXT)).dns(host -> {
+                var ipv6 = new ArrayList<InetAddress>();
+                for (InetAddress address : Dns.SYSTEM.lookup(host)) {
+                    if (address instanceof Inet6Address && (address.getAddress()[0] & 0xe0) == 0x20) ipv6.add(address);
+                }
+                if (ipv6.isEmpty()) throw new UnknownHostException("ipv6_dns_address_required");
+                return ipv6;
+            });
             return builder.build();
         } catch (Exception error) { throw new IOException("native_transport_unavailable", error); }
     }
     Route prepare(String raw, String publicKey, String authority, Track track) throws IOException {
+        return prepare(raw, publicKey, authority, false, track);
+    }
+    Route prepare(String raw, String publicKey, String authority, boolean ipv6Http, Track track) throws IOException {
+        if (ipv6Http) {
+            if (authority != null) throw new IOException("invalid_host_authority");
+            return prepareRoute(origin(raw, true), publicKey, track);
+        }
         if(authority==null) return prepare(raw,publicKey,track);
         if(authority.length()>4096) throw new IOException("invalid_host_authority");
         String id=origin(raw)+"\0"+publicKey+"\0"+authority;
@@ -181,7 +208,9 @@ final class HubTls implements AutoCloseable {
         return scoped.prepare(raw,publicKey,track);
     }
     Route prepare(String raw, String publicKey, Track track) throws IOException {
-        HttpUrl base = origin(raw);
+        return prepareRoute(origin(raw), publicKey, track);
+    }
+    private Route prepareRoute(HttpUrl base, String publicKey, Track track) throws IOException {
         key(publicKey);
         String identity = routeIdentity(base,publicKey);
         Entry entry;
@@ -191,6 +220,12 @@ final class HubTls implements AutoCloseable {
         }
         synchronized (entry) {
             if (entry.route != null && System.nanoTime() - entry.route.created < PIN_AGE_NANOS) return entry.route;
+            if (!base.isHttps()) {
+                Route next = new Route(base, client(base, null));
+                if (entry.route != null) entry.route.retire();
+                entry.route = next;
+                return next;
+            }
             byte[] random = new byte[32]; new SecureRandom().nextBytes(random);
             String nonce = Base64.toBase64String(random).replace('+','-').replace('/','_').replace("=","");
             OkHttpClient bootstrap = client(base, null);
@@ -223,7 +258,7 @@ final class HubTls implements AutoCloseable {
         if(failed==null) return;
         synchronized(authorities) { for(HubTls scoped:authorities.values()) scoped.forget(origin,key,failed); }
         try { synchronized(routes) {
-            String identity=routeIdentity(origin(origin),key); Entry entry=routes.get(identity);
+            String identity=routeIdentity(origin(origin, !failed.base.isHttps()),key); Entry entry=routes.get(identity);
             if(entry!=null && entry.route==failed) { routes.remove(identity); failed.retire(); }
         } } catch(IOException ignored) { }
     }

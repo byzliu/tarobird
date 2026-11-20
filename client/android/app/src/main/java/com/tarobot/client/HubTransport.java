@@ -125,7 +125,8 @@ final class HubTransport implements AutoCloseable {
             byte[] bytes=body==null?null:HubTls.decode(body);
             if(bytes!=null && bytes.length>BODY_LIMIT) throw new IOException("native_body_too_large");
             JSONArray headers=input.getJSONArray("headers"); if(headers.length()>32) throw new IOException("invalid_http_headers");
-            HubTls.Route route=network.prepare(origin,key,input.has("certificateAuthority") ? string(input,"certificateAuthority") : null,call->track(slot,call)); activeRoute=route; alive(slot);
+            HubTls.Route route=network.prepare(origin,key,input.has("certificateAuthority") ? string(input,"certificateAuthority") : null,
+                Boolean.TRUE.equals(input.opt("ipv6Http")),call->track(slot,call)); activeRoute=route; alive(slot);
             Request.Builder request=new Request.Builder().url(HubTls.target(route.base,string(input,"path"))); int total=0;
             for(int i=0;i<headers.length();i++) {
                 JSONArray pair=headers.getJSONArray(i); if(pair.length()!=2) throw new IOException("invalid_http_headers");
@@ -170,9 +171,12 @@ final class HubTransport implements AutoCloseable {
     }
     void socketOpen(String id, String origin, String key) throws Exception { socketOpen(id,origin,key,null); }
     void socketOpen(String id, String origin, String key, String authority) throws Exception {
+        socketOpen(id, origin, key, authority, false);
+    }
+    void socketOpen(String id, String origin, String key, String authority, boolean ipv6Http) throws Exception {
         Slot slot=get(id,"socket"); start(slot);
         try {
-            HubTls.Route route=network.prepare(origin,key,authority,call->track(slot,call));
+            HubTls.Route route=network.prepare(origin,key,authority,ipv6Http,call->track(slot,call));
             HubSocket socket=new HubSocket(route,new HubSocket.Listener() {
                 public void opened() { synchronized(HubTransport.this) {
                     if(slot.cancelled || slots.get(slot.id)!=slot) { slot.socket.cancel(); return; }

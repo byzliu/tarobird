@@ -48,7 +48,7 @@ struct Id { id: String }
 #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)]
 struct HttpOpen { id: String, input: HttpInput }
 #[derive(serde::Deserialize)] #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SocketOpen { id: String, origin: String, hub_key: Option<String>, certificate_authority: Option<String>, channel: String }
+struct SocketOpen { id: String, origin: String, hub_key: Option<String>, certificate_authority: Option<String>, #[serde(default)] ipv6_http: bool, channel: String }
 #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)]
 struct SocketSend { id: String, text: String }
 #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)]
@@ -107,7 +107,7 @@ async fn dispatch(services: &Services, output: &Output, command: &str, value: Va
                         None => Err("native_view_unavailable".to_owned()),
                     }
                 });
-                match services.transport.socket_open(a.id, a.origin, a.hub_key, a.certificate_authority, emit, VIEW) {
+                match services.transport.socket_open(a.id, a.origin, a.hub_key, a.certificate_authority, a.ipv6_http, emit, VIEW) {
                     Ok(start) => (Ok(Value::Null), Some(start)),
                     Err(e) => plain(Err(e)),
                 }

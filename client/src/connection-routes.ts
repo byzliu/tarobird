@@ -1,11 +1,11 @@
-import { type Deployment, type Route, routesSchema, localRoutesSchema, deploymentMatchesRoutes } from "../../src/client-protocol/routes.js";
+import { type Deployment, type Route, routesSchema, localRoutesSchema, deploymentMatchesRoutes, isIpv6HttpRoute, ipv6DdnsOriginSchema } from "../../src/client-protocol/routes.js";
 import { validateRoute } from "./identity.js";
 import { t } from "./i18n.js";
 
 export function connectionRoutes(deployment: Deployment | undefined, address: string, relays: Route[], legacyDirect?: Route): Route[] {
   const routes: Route[] = [];
   if (deployment !== "vps-relay" && address.trim()) {
-    const url = validateRoute(address);
+    const url = legacyDirect && address.trim() === legacyDirect.url && isIpv6HttpRoute(legacyDirect) ? legacyDirect.url : validateRoute(address);
     routes.push({ name: legacyDirect?.url === url ? legacyDirect.name : "Direct", url, ...(legacyDirect?.url === url && legacyDirect.label ? { label: legacyDirect.label } : {}), ...(legacyDirect?.url === url && legacyDirect.certificateAuthority ? { certificateAuthority: legacyDirect.certificateAuthority } : {}) });
   }
   if (deployment === "vps-direct" && !routes.length) throw new Error(t("请填写运行 Bot 的 VPS 主机 HTTPS 地址。"));
@@ -35,7 +35,8 @@ export function multipathConfiguration(direct: Route[], relays: Route[], previou
   const entered = [...direct, ...relays].filter(route => route.url.trim() || route.label?.trim());
   const routes = entered.map(route => {
     if (!route.url.trim()) throw new Error(t("请填写每条线路的地址，或移除空白线路。"));
-    const url = validateRoute(route.url), trusted = previous.find(value => value.url === url);
+    const url = isIpv6HttpRoute(route) ? ipv6DdnsOriginSchema.parse(route.url) : validateRoute(route.url);
+    const trusted = previous.find(value => value.url === url);
     return { name: route.name, url, ...(route.label?.trim() ? { label: route.label.trim() } : {}),
       ...(trusted?.certificateAuthority ? { certificateAuthority: trusted.certificateAuthority } : {}) };
   });

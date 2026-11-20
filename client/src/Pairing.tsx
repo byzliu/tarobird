@@ -7,7 +7,7 @@ import { ArrowLeft, ChevronLeft, ClipboardPaste, ImagePlus, LoaderCircle, Monito
 import type { PairingProps } from "./HostApp.js";
 import { BrandMark, PairingIntro } from "./BrandScenes.js";
 import { connectionConfiguration } from "./connection-routes.js";
-import { orderedRoutes, type Deployment } from "../../src/client-protocol/routes.js";
+import { isIpv6HttpRoute, orderedRoutes, type Deployment } from "../../src/client-protocol/routes.js";
 import { createIdentity, randomNonce } from "./identity.js";
 import { cache, type Route, type Identity, type PendingPairing } from "./storage.js";
 import { nativePlatform, deleteNativeIdentity } from "./native.js";
@@ -99,7 +99,7 @@ export function Pairing({ connected, save, beforePair, discard, cancel, pendingC
     try {
       if (!invite) throw new Error(pairingInviteError("invite_required"));
       const { routes, deployment: routeDeployment } = connectionConfiguration(address, relays, deployment, legacyDirect);
-      if (usesPinnedTransport() && routes.some((route) => route.url.startsWith("https:")) && !trustedKey) throw new Error(t("请扫描可信设备上的 Hub 二维码，或填写主机身份公钥。"));
+      if (usesPinnedTransport() && routes.some(route => route.url.startsWith("https:") || isIpv6HttpRoute(route)) && !trustedKey) throw new Error(t("请扫描可信设备上的 Hub 二维码，或填写主机身份公钥。"));
       if (usesPinnedTransport() && trustedKey && !validHubPublicKey(trustedKey)) throw new Error("invalid_hub_key");
       rememberRouteTrust(routes, trustedKey);
       const probes = await Promise.allSettled(orderedRoutes(routes).map(async (route) => {
@@ -210,6 +210,7 @@ export function Pairing({ connected, save, beforePair, discard, cancel, pendingC
         </div>}
         {expectedKey && <div className="pairing-import" role="status"><Monitor size={18}/><div><strong>{t("已读取主机信息")}</strong><p className="muted">{address ? directHost || address : t("VPS 中转")}</p>{reviewing && <p className="pairing-import-state">{t("尚未连接，请继续完成下方配对。")}</p>}</div><button type="button" disabled={busy} onClick={() => { setInputMode("text"); setScan(true); }}>{t("更换连接信息")}</button></div>}
         {!reviewing && routeHint}
+        {legacyDirect && address.trim() === legacyDirect.url && isIpv6HttpRoute(legacyDirect) && <p className="settings-warning">{t("这条公网 HTTP 线路会明文传输数据。")}</p>}
         {(manual || expectedKey) && <>
           <label>{t("设备名称")}<input value={name} required maxLength={100} disabled={busy} aria-describedby="pairing-device-name-help" onChange={(e) => setName(e.target.value)}/></label><p id="pairing-device-name-help" className="settings-note muted">{t("确认一个其他设备也能认出的名称，例如 MacBook Pro 或 vivo 手机。")}</p>
           <details className="pairing-options" open={manual} onToggle={(e) => setManual(e.currentTarget.open)}><summary>{t("手动连接与高级选项")}</summary>

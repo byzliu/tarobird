@@ -1484,6 +1484,30 @@
           "fingerprint": "d2a4c7100116c273732bd68f5fc6f61ba55591215158ab88b06927b0c899d454"
         }
       ]
+    },
+    {
+      "path": "client/e2e/device-invite.spec.ts",
+      "sha256": "753c0660f98f14e45091c24b175b46afe38658614aa9338c133415f5f413d13c",
+      "reviewer": "codex",
+      "note": "Reviewed unchanged synthetic Tailscale fixtures. This update changes only which owner route view the fixture requests.",
+      "findings": [
+        {
+          "kind": "non-example-public-ip",
+          "fingerprint": "d2a4c7100116c273732bd68f5fc6f61ba55591215158ab88b06927b0c899d454"
+        }
+      ]
+    },
+    {
+      "path": "client/e2e/fixtures/device-invite.tsx",
+      "sha256": "0ce2f4cc375614b31c023d5ad9c3b43631e3753f974e56ed3ada1b5e1e0bc357",
+      "reviewer": "codex",
+      "note": "Reviewed unchanged synthetic Tailscale fixtures. This update changes only which owner route view the fixture requests.",
+      "findings": [
+        {
+          "kind": "non-example-public-ip",
+          "fingerprint": "d2a4c7100116c273732bd68f5fc6f61ba55591215158ab88b06927b0c899d454"
+        }
+      ]
     }
   ]
 }

@@ -1,15 +1,19 @@
 import type { Route } from "./storage.js";
-// Public CA material only. Trust is scoped to a specific origin AND Hub key.
-const authorities = new Map<string, string>();
+import { isIpv6HttpRoute } from "../../src/client-protocol/routes.js";
+
+type RouteTrust = { certificateAuthority?: string; ipv6Http?: true };
+// Route transport choices are scoped to a specific origin and Hub key.
+const trustByRoute = new Map<string, RouteTrust>();
 export function rememberRouteTrust(routes: readonly Route[], hubKey: string | undefined) {
   if (!hubKey) return;
   for (const route of routes) {
     const key = `${new URL(route.url).origin}\0${hubKey}`;
-    if (route.certificateAuthority) authorities.set(key, route.certificateAuthority); else authorities.delete(key);
+    if (route.certificateAuthority) trustByRoute.set(key, { certificateAuthority: route.certificateAuthority });
+    else if (isIpv6HttpRoute(route)) trustByRoute.set(key, { ipv6Http: true });
+    else trustByRoute.delete(key);
   }
-  while (authorities.size > 128) authorities.delete(authorities.keys().next().value!);
+  while (trustByRoute.size > 128) trustByRoute.delete(trustByRoute.keys().next().value!);
 }
-export function routeTrust(origin: string, key: string | undefined): { certificateAuthority?: string } {
-  const ca = key && authorities.get(`${new URL(origin).origin}\0${key}`);
-  return ca ? { certificateAuthority: ca } : {};
+export function routeTrust(origin: string, key: string | undefined): RouteTrust {
+  return key ? trustByRoute.get(`${new URL(origin).origin}\0${key}`) ?? {} : {};
 }

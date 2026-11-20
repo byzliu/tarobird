@@ -662,7 +662,7 @@ export async function runHostCli(argv: string[]): Promise<void> {
     } else if (v["ipv6-ddns"]) {
       const client = await LocalHostClient.connect(directory);
       try {
-        const view = await new HostNetwork(client).localRoutes();
+        const view = await new HostNetwork(client).localRoutes(true);
         const entry = view.routes.find(({ source, route }) => source === "managed" && isIpv6DdnsRoute(route));
         if (!entry) throw new Error("IPv6（DDNS）入口未监听。请检查主机 config.json 中的 ipv6Ddns、TLS 证书和监听端口。");
         routes = [entry.route];

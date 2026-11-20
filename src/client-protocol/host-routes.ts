@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { isLoopbackOrUnspecified } from "./loopback-address.js";
-import { localRoutesSchema, MAX_LOCAL_ROUTES, routeSchema, type Route } from "./routes.js";
+import { isIpv6HttpRoute, localRoutesSchema, MAX_LOCAL_ROUTES, routeSchema, type Route } from "./routes.js";
 
 /** Advertised in `ready.serverCapabilities` by Hubs that serve the owner-only
  * self-route view below. Older Hubs omit it; clients then keep their routes. */
@@ -9,6 +9,7 @@ export const HOST_LAN_SELECTION_CAPABILITY = "host-routes.select-lan.v1";
 export const HOST_LAN_SELECTION_PATH = "/api/network/host-routes/select-lan";
 export const managedLanSelectionSchema = z.object({ route: routeSchema }).strict();
 export const HOST_ROUTES_PATH = "/api/network/host-routes";
+export const HOST_INVITE_ROUTES_PATH = `${HOST_ROUTES_PATH}?ipv6Http=1`;
 
 /** `shared` routes are the host's signed single-direct descriptor (wire v2).
  * `managed` routes are additional host listeners outside the signed directory
@@ -31,9 +32,9 @@ export const hostRoutesViewSchema = z.object({
   const routes = view.routes.map(entry => entry.route);
   if (routes.length && !localRoutesSchema.safeParse(routes).success) ctx.addIssue({ code: "custom", message: "invalid_host_routes" });
   // A phone must never be told to dial its own loopback or an unspecified bind.
-  for (const route of routes) {
+  for (const { source, route } of view.routes) {
     const url = new URL(route.url);
-    if (url.protocol !== "https:" || isLoopbackOrUnspecified(url.hostname)) ctx.addIssue({ code: "custom", message: "invalid_host_route_address" });
+    if (isLoopbackOrUnspecified(url.hostname) || url.protocol !== "https:" && !(source === "managed" && isIpv6HttpRoute(route))) ctx.addIssue({ code: "custom", message: "invalid_host_route_address" });
   }
 });
 export type HostRoutesView = z.infer<typeof hostRoutesViewSchema>;
