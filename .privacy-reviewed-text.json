@@ -1452,6 +1452,38 @@
           "fingerprint": "ffe27392eb3e6ac8cca1fed5637a4c727bca806b99147ec8cf5913c3f82efc98"
         }
       ]
+    },
+    {
+      "path": "tests/hub-host-routes.test.ts",
+      "sha256": "c757cffa63b1270bfe816a243679fe426493c1a9ba164eeab35ad6d7c645a5ff",
+      "reviewer": "codex",
+      "note": "Reviewed the original synthetic Tailscale values and the new IPv6 DDNS test using example DNS names and an isolated TLS fixture.",
+      "findings": [
+        {
+          "kind": "non-example-public-ip",
+          "fingerprint": "dacf3f4d33be55bca20361714d8f6e4a056ad3d217dc7ed70fb3d373c3dfc32f"
+        },
+        {
+          "kind": "non-example-public-ip",
+          "fingerprint": "2241f04e44531710591553b9c15519acc0d50866bf75daed3d2c041375e33a5d"
+        },
+        {
+          "kind": "non-example-public-ip",
+          "fingerprint": "99e68e6fb6f98ae9bbcea0fb5d7c831c326653011c5092cfe5daf4357f555984"
+        }
+      ]
+    },
+    {
+      "path": "client/e2e/device-invite.spec.ts",
+      "sha256": "697cd1e435493da658937a3757b967e5a37e504fb157f21464117b92334fec69",
+      "reviewer": "codex",
+      "note": "Reviewed the original synthetic Tailscale values and the new IPv6 DDNS test using example DNS names and an isolated TLS fixture.",
+      "findings": [
+        {
+          "kind": "non-example-public-ip",
+          "fingerprint": "d2a4c7100116c273732bd68f5fc6f61ba55591215158ab88b06927b0c899d454"
+        }
+      ]
     }
   ]
 }

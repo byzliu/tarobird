@@ -275,22 +275,29 @@ flowchart TB
     direction LR
     phone3("Phone") <--> vps("VPS<br/>Relay only") <--> host3("Computer<br/>Runs Bots")
   end
+  subgraph ddns["04 · IPv6 (DDNS) · Remote"]
+    direction LR
+    phone4("Phone") <-->|"IPv6 HTTPS"| host4("Computer<br/>DDNS hostname")
+  end
   lan ~~~ tailscale
   tailscale ~~~ relay
+  relay ~~~ ddns
   classDef device fill:#f6f6f5,stroke:#b6bab7,color:#27312e
   classDef host fill:#fff1e4,stroke:#caa17c,color:#503b2a
   classDef relayNode fill:#edf3ee,stroke:#92a795,color:#304e39
-  class phone1,phone2,phone3 device
-  class host1,host2,host3 host
+  class phone1,phone2,phone3,phone4 device
+  class host1,host2,host3,host4 host
   class vps relayNode
   style lan fill:transparent,stroke:#b6bab7,rx:8,ry:8
   style tailscale fill:transparent,stroke:#b6bab7,rx:8,ry:8
   style relay fill:transparent,stroke:#b6bab7,rx:8,ry:8
+  style ddns fill:transparent,stroke:#b6bab7,rx:8,ry:8
 ```
 
 | Option | Best for | What you need |
 | :--- | :--- | :--- |
 | **Local network (LAN)** | Phone and computer on the same Wi-Fi or reachable local network | No extra network service; devices must be able to reach each other |
+| **[IPv6 (DDNS) direct](docs/client/ipv6-ddns.md#ipv6-ddns-direct-access)** | Away from home on an IPv6-capable network | Public IPv6 on the host, a DDNS AAAA record, HTTPS certificate and inbound TCP port |
 | **Remote access with Tailscale** | Away from home, with Tailscale on both devices | Both devices in the same Tailscale network; no VPS of your own required |
 | **VPS relay** | Away from home, with no VPN on the phone | A cloud server; we recommend letting an AI deploy it |
 

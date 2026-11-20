@@ -2015,6 +2015,7 @@
   "语音未发送，已保留为草稿：{0}": "Voice message was not sent and is saved as a draft: {0}",
   "正在发送…": "Sending…",
   "选择连接方式": "Choose a connection method",
+  "新设备的网络需要支持 IPv6。": "The new device needs a network with IPv6 access.",
   "同一 Wi-Fi": "Same Wi-Fi",
   "Tailscale 异地连接": "Remote access with Tailscale",
   "电脑和手机安装 Tailscale，登录同一账号并开启连接。": "Install Tailscale on your computer and phone, sign in to the same account, and connect both devices.",

@@ -22,7 +22,7 @@ import { HubStore } from "./store.js";
 import { hubServiceCommand, inspectHubService, startHubControl } from "./service.js";
 import { RelayTunnels } from "../relay/tunnels.js";
 import { RelaySources } from "../relay/sources.js";
-import { loadHubTls } from "./tls.js";
+import { loadHubTls, loadIpv6DdnsTls } from "./tls.js";
 import { openGoogleDocs } from "../gdocs/cli.js";
 import { backupHubState, restoreHubState, type HubStateBackup } from "./state-backup.js";
 import { closeHubRuntime } from "./shutdown.js";
@@ -85,12 +85,16 @@ export async function runHubCli(argv: string[]): Promise<void> {
     const supervisor = process.env.TAROBOT_HOST_SUPERVISOR;
     delete process.env.TAROBOT_HOST_SUPERVISOR;
     const config = await readHubConfig(directory);
+    const ipv6Ddns = config.ipv6Ddns && {
+      url: config.ipv6Ddns.url,
+      tls: await loadIpv6DdnsTls(directory, config.ipv6Ddns.url, config.ipv6Ddns.tls),
+    };
     const relaySources = new RelaySources();
     const relay = await RelayTunnels.load({ ...config, host: args.values.host ?? config.host, port: args.values.port ? z.coerce.number().int().min(1).max(65535).parse(args.values.port) : config.port }, (code) => console.error(`[${new Date().toISOString()}] Hub relay: ${code}`), relaySources);
     const lock = await acquireInstanceLock(directory).catch(error => { if (error instanceof Error && error.message.startsWith("Instance lock already held")) Object.assign(error, { exitCode: 78 }); throw error; });
     let packageRoot = path.dirname(fileURLToPath(import.meta.url));
     while (!await stat(path.join(packageRoot, "package.json")).then(() => true, () => false)) { const parent = path.dirname(packageRoot); if (parent === packageRoot) throw new Error("TaroBird package root not found"); packageRoot = parent; }
-    const hub = await HubServer.start({ relaySources, managedBots: { entrypoint: fileURLToPath(new URL("../index.js", import.meta.url)), env: hostProcessEnvironment() }, stateDir: directory, exposure: config.exposure, host: args.values.host ?? config.host, port: args.values.port ? z.coerce.number().int().min(1).max(65535).parse(args.values.port) : config.port, origins: config.origins, maxFileBytes: config.maxFileBytes, push: config.push, instancePort: config.instancePort, tlsListeners: await Promise.all(config.tlsListeners.map(async (listener) => ({ ...listener, managed: listener.tls.cert === path.join(directory, "desktop-tls/server.pem"), tls: await loadHubTls(listener.tls) }))), googleDocs: () => openGoogleDocs(directory), clientDir: config.clientDir ?? path.join(packageRoot, "client", "dist"), ...(config.tls ? { tls: await loadHubTls(config.tls) } : {}), onWarning: (code) => console.error(`[${new Date().toISOString()}] Hub: ${code}`) }).catch(async (error: unknown) => { await lock.release(); throw error; });
+    const hub = await HubServer.start({ relaySources, managedBots: { entrypoint: fileURLToPath(new URL("../index.js", import.meta.url)), env: hostProcessEnvironment() }, stateDir: directory, exposure: config.exposure, host: args.values.host ?? config.host, port: args.values.port ? z.coerce.number().int().min(1).max(65535).parse(args.values.port) : config.port, origins: config.origins, maxFileBytes: config.maxFileBytes, push: config.push, instancePort: config.instancePort, tlsListeners: await Promise.all(config.tlsListeners.map(async (listener) => ({ ...listener, managed: listener.tls.cert === path.join(directory, "desktop-tls/server.pem"), tls: await loadHubTls(listener.tls) }))), ipv6Ddns, googleDocs: () => openGoogleDocs(directory), clientDir: config.clientDir ?? path.join(packageRoot, "client", "dist"), ...(config.tls ? { tls: await loadHubTls(config.tls) } : {}), onWarning: (code) => console.error(`[${new Date().toISOString()}] Hub: ${code}`) }).catch(async (error: unknown) => { await lock.release(); throw error; });
     retainAdmission = true;
     const stopCrashMonitor = monitorServiceCrashes(directory, "hub", "hub");
     let networkRefresh: Promise<void> | undefined, refreshingStopped = false;

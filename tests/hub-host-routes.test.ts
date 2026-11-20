@@ -1,16 +1,22 @@
-import { generateKeyPairSync, randomBytes, sign } from "node:crypto";
+import { createPrivateKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { request } from "node:https";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HubServer } from "../src/hub/server.js";
-import { deviceProof } from "../src/hub/auth.js";
+import { deviceProof, parsePublicKey, serverProof } from "../src/hub/auth.js";
 import * as desktopTls from "../src/hub/desktop-tls.js";
-import { loadHubTls } from "../src/hub/tls.js";
+import { KeyUsagesExtension, KeyUsageFlags, SubjectAlternativeNameExtension, X509CertificateGenerator } from "@peculiar/x509";
+import { WebSocket } from "ws";
+import { loadHubTls, loadIpv6DdnsTls } from "../src/hub/tls.js";
+import { hubConfigSchema } from "../src/hub/config.js";
 import { CAPABILITIES } from "../src/client-protocol/index.js";
 import { HOST_ROUTES_CAPABILITY, HOST_ROUTES_PATH, HOST_LAN_SELECTION_CAPABILITY, HOST_LAN_SELECTION_PATH, hostRoutesViewSchema } from "../src/client-protocol/host-routes.js";
-import { routesSchema, type Route } from "../src/client-protocol/routes.js";
+import { IPV6_DDNS_LABEL, routesSchema, type Route } from "../src/client-protocol/routes.js";
+import { enrollTrusted, invitedPairing, issueInvite, pairingRequestId, testDevice } from "./helpers/pairing-invite.js";
 import { networkViewSchema, sharedRoutesSchema } from "../src/client-protocol/private-network.js";
 import {
   certificateAuthorityFromChain, lanInterfaceKey, emptyHostRoutesRecord, HOST_ROUTE_COOLDOWN_MS, HOST_ROUTES_KEY, HostRoutes, observeHostRoutes, sharedRouteReplacement,
@@ -85,8 +91,10 @@ describe("signed descriptor replacement fence", () => {
   });
 });
 
-async function freePort() {
-  const server = net.createServer(); await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+async function freePort(host = "127.0.0.1") {
+  const server = net.createServer();
+  server.listen(0, host);
+  await once(server, "listening");
   const port = (server.address() as net.AddressInfo).port; await new Promise<void>(resolve => server.close(() => resolve())); return port;
 }
 let directory: string | undefined, hub: HubServer | undefined;
@@ -106,6 +114,68 @@ async function enroll(target: HubServer, id = "owner_device", userId = "owner") 
 }
 
 describe("host route coordinator", () => {
+  it("serves IPv6 DDNS with verified TLS and signed pairing alongside existing routes", async () => {
+    const tlsDirectory = await mkdtemp(path.join(os.tmpdir(), "ddns-tls-"));
+    const hostname = "hub.example.test", port = await freePort("::1"), url = `https://${hostname}:${port}`;
+    const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const cert = (await X509CertificateGenerator.createSelfSigned({
+      name: `CN=${hostname}`, keys, signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
+      extensions: [new SubjectAlternativeNameExtension([{ type: "dns", value: hostname }]), new KeyUsagesExtension(KeyUsageFlags.digitalSignature)],
+    })).toString("pem");
+    const key = createPrivateKey({ key: Buffer.from(await crypto.subtle.exportKey("pkcs8", keys.privateKey)), format: "der", type: "pkcs8" });
+    const files = { cert: "fullchain.pem", key: "key.pem" };
+    try {
+      await writeFile(path.join(tlsDirectory, files.cert), cert);
+      await writeFile(path.join(tlsDirectory, files.key), key.export({ format: "pem", type: "pkcs8" }));
+      const config = hubConfigSchema.parse({ ipv6Ddns: { url, tls: files } }).ipv6Ddns!;
+      await expect(loadIpv6DdnsTls(tlsDirectory, "https://other.example.test", files)).rejects.toThrow("must cover");
+      const target = await start({ ipv6Ddns: { url: config.url, tls: await loadIpv6DdnsTls(tlsDirectory, config.url, config.tls) } });
+      const shared = [tailscale("https://100.64.0.6:8443"), vps];
+      await target.network.replaceManagedRoutes([], shared);
+      const owner = await enrollTrusted(target.auth, testDevice("ddns_owner"));
+      const { invite } = await issueInvite(target.auth, owner);
+      const phone = testDevice("ddns_phone");
+      async function https(path: string, { body, address = "::1", origin = url, token }: { body?: object; address?: string; origin?: string; token?: string } = {}) {
+        const req = request({ hostname: address, port, servername: hostname, ca: cert, path,
+          method: body ? "POST" : "GET", headers: { Origin: origin, ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+        const response = once(req, "response");
+        req.end(body && JSON.stringify(body));
+        const [res] = await response;
+        let text = "";
+        for await (const chunk of res) text += chunk;
+        return { status: res.statusCode, json: JSON.parse(text) };
+      }
+      expect(await https("/health")).toMatchObject({ status: 200, json: { publicKey: target.auth.publicKey } });
+      await expect(https("/health", { address: "127.0.0.1" })).rejects.toMatchObject({ code: "ECONNREFUSED" });
+      expect((await https("/health", { origin: "https://other.example.test" })).status).toBe(403);
+      expect((await https("/api/instance/workbench")).status).toBe(401);
+      const paired = await https("/api/pair", { body: invitedPairing(phone, invite, pairingRequestId()) });
+      expect(paired).toMatchObject({ status: 201, json: { hubPublicKey: target.auth.publicKey, code: expect.stringMatching(/^\d{8}$/) } });
+      await target.auth.approve(paired.json.code, "local-owner");
+
+      const socket = new WebSocket(`wss://[::1]:${port}/ws`, { ca: cert, servername: hostname, origin: url });
+      try {
+        await once(socket, "open");
+        const nonce = randomBytes(32).toString("base64url"), challenge = once(socket, "message");
+        socket.send(JSON.stringify({ v: 1, type: "hello", deviceId: phone.deviceId, nonce, protocolVersions: [1], capabilities: [], cursors: {} }));
+        const frame = JSON.parse(String((await challenge)[0]));
+        expect(frame.type).toBe("challenge");
+        expect(frame.publicKey).toBe(target.auth.publicKey);
+        expect(verify(null, serverProof(phone.deviceId, frame.nonce, nonce), parsePublicKey(frame.publicKey), Buffer.from(frame.signature, "base64"))).toBe(true);
+        const ready = once(socket, "message");
+        socket.send(JSON.stringify({ v: 1, type: "auth", signature: sign(null, deviceProof(phone.deviceId, frame.nonce, nonce), phone.privateKey).toString("base64") }));
+        const session = JSON.parse(String((await ready)[0]));
+        expect(session.type).toBe("ready");
+        const routes = await https(HOST_ROUTES_PATH, { token: session.sessionToken });
+        expect(hostRoutesViewSchema.parse(routes.json)).toMatchObject({ routes: [
+          ...shared.map(route => ({ source: "shared", route })),
+          { source: "managed", route: { name: "Direct", label: IPV6_DDNS_LABEL, url } },
+        ] });
+        expect(await target.network.sharedRoutes()).toEqual(shared);
+      } finally { socket.terminate(); }
+    } finally { await rm(tlsDirectory, { recursive: true, force: true }); }
+  });
+
   it("adopts a new Tailscale address for owners at once and republishes the stale shared route after confirmation", async () => {
     const target = await start(); let now = 1_000_000, live = [listener("100.64.0.7")];
     await writeFile(path.join(directory!, "desktop-tailscale-enabled.json"), "true\n");

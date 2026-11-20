@@ -1,10 +1,10 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { HOST_ROUTES_PATH, hostRoutesViewSchema, type HostRoutesView } from "../../src/client-protocol/host-routes.js";
-import type { Route } from "../../src/client-protocol/routes.js";
+import { IPV6_DDNS_LABEL, isIpv6DdnsRoute, type Route } from "../../src/client-protocol/routes.js";
 import type { HubConnection } from "./connection.js";
 import { t } from "./i18n.js";
 
-/** Owner-only read of the host's own LAN/Tailscale listener view. */
+/** Owner-only read of the host's own connection routes. */
 export function useHostRoutesView(connection: HubConnection): HostRoutesView | undefined {
   const [view, setView] = useState<HostRoutesView>();
   const state = useSyncExternalStore(notify => connection.subscribe(notify), () => connection.state), key = connection.identity.hubPublicKey;
@@ -22,10 +22,11 @@ export function useHostRoutesView(connection: HubConnection): HostRoutesView | u
   return available ? view : undefined;
 }
 
-/** The host's entry addresses for other devices, one row per enabled mode.
+/** The host's entry addresses for other devices.
  * Loopback is never published, so these never duplicate 主机直连. */
-export function hostEntries(view: HostRoutesView): { mode: "lan" | "tailscale"; route: Route; listening: boolean; confirmationRequired: boolean }[] {
-  const seen = new Set<string>(), entries: { mode: "lan" | "tailscale"; route: Route; listening: boolean; confirmationRequired: boolean }[] = [];
+type HostEntry = { mode: "lan" | "tailscale" | "ipv6-ddns"; route: Route; listening: boolean; confirmationRequired: boolean };
+export function hostEntries(view: HostRoutesView): HostEntry[] {
+  const seen = new Set<string>(), entries: HostEntry[] = [];
   for (const [mode, name] of [["lan", "Direct"], ["tailscale", "Tailscale"]] as const) {
     if (!view.local[mode].enabled) continue;
     // A listening mode may still retain an old address while the host waits
@@ -35,8 +36,10 @@ export function hostEntries(view: HostRoutesView): { mode: "lan" | "tailscale"; 
     const confirmationRequired = listening && (view.notices.includes("replacement_pending") || (mode === "lan"
       ? view.notices.includes("lan_selection_required") || view.notices.includes("lan_not_listening")
       : view.notices.includes("tailscale_not_listening")));
-    for (const { route } of view.routes) if (route.name === name && !seen.has(route.url)) { seen.add(route.url); entries.push({ mode, route, listening, confirmationRequired }); }
+    for (const { route } of view.routes) if (route.name === name && !isIpv6DdnsRoute(route) && !seen.has(route.url)) { seen.add(route.url); entries.push({ mode, route, listening, confirmationRequired }); }
   }
+  const ddns = view.routes.find(({ source, route }) => source === "managed" && isIpv6DdnsRoute(route))?.route;
+  if (ddns) entries.push({ mode: "ipv6-ddns", route: ddns, listening: true, confirmationRequired: false });
   return entries;
 }
 
@@ -50,7 +53,7 @@ export function HostRoutesStatus({ connection, view }: { connection: HubConnecti
   // Keep this explicitly historical; listener reads do not run a fresh merge.
   const limited = Object.values(state.routeSync ?? {}).some(result => result.limited);
   return <>{limited && <p className="settings-note" role="status">{t("上次同步时线路数量已达上限，部分主机线路未添加。请在编辑线路中腾出空间，随后会自动重试。")}</p>}<details className="settings-help host-route-status"><summary>{t("主机入口状态")}</summary>
-    <dl><div><dt>{t("局域网入口")}</dt><dd>{status(view.local.lan)}</dd></div><div><dt>{t("Tailscale 入口")}</dt><dd>{status(view.local.tailscale)}</dd></div></dl>
+    <dl><div><dt>{t("局域网入口")}</dt><dd>{status(view.local.lan)}</dd></div><div><dt>{t("Tailscale 入口")}</dt><dd>{status(view.local.tailscale)}</dd></div>{view.routes.some(({ source, route }) => source === "managed" && isIpv6DdnsRoute(route)) && <div><dt>{IPV6_DDNS_LABEL}</dt><dd>{t("已开启，正在监听")}</dd></div>}</dl>
     {view.notices.includes("lan_selection_required") && <p>{t("无法确认新的局域网地址是否来自原网卡，未自动替换。请在主机准备连接时选择正确网络，再扫码添加。")}</p>}
     {view.notices.includes("tailscale_not_listening") && <p>{t("Tailscale 入口当前未监听。请确认主机上的 Tailscale 已连接，主机仍在运行。")}</p>}
     {view.notices.includes("replacement_pending") && <p>{t("主机地址发生变化，正在等待稳定后同步。现有线路会保留。")}</p>}

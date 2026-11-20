@@ -11,9 +11,9 @@ export const managedLanSelectionSchema = z.object({ route: routeSchema }).strict
 export const HOST_ROUTES_PATH = "/api/network/host-routes";
 
 /** `shared` routes are the host's signed single-direct descriptor (wire v2).
- * `managed` routes are additional desktop-managed LAN/Tailscale listeners that
- * never enter the signed directory, QR v1 or `private-network:v1` state. The
- * tag exists only in this envelope; stored routes stay plain strict routes. */
+ * `managed` routes are additional host listeners outside the signed directory
+ * and `private-network:v1` state. A selected managed route can be shared by QR
+ * v1. The source tag exists only in this envelope. */
 export const hostRouteSourceSchema = z.enum(["shared", "managed"]);
 export const hostRouteNoticeSchema = z.enum([
   "lan_selection_required", "lan_not_listening", "tailscale_not_listening", "replacement_pending",

@@ -44,7 +44,7 @@ import { formatLocalRoutes } from "./network-local.js";
 import { tailscaleDiagnostic } from "./tailscale-status.js";
 import { isTailscaleAddress } from "../hub/network.js";
 import { networkCanonical, sharedRoutesSchema, type NetworkCommand } from "../client-protocol/private-network.js";
-import { routesSchema, type Route } from "../client-protocol/routes.js";
+import { isIpv6DdnsRoute, routesSchema, type Route } from "../client-protocol/routes.js";
 import { createBotSchema } from "../client-protocol/bots.js";
 import { piSessionThinkingSchema, type PiSessionChange } from "../client-protocol/pi-session.js";
 import { hashSecret } from "../hub/auth.js";
@@ -62,6 +62,7 @@ export const HOST_CLI_HELP = `TaroBird — 同一台主机，桌面与命令行�
   tarobot service install               安装当前用户的后台服务
   tarobot start                         启动主机，登记本机 CLI 控制器
   tarobot pair --lan                    开启局域网 HTTPS 并显示连接二维码（供手机或电脑扫描）
+  tarobot pair --ipv6-ddns              显示已配置的 IPv6（DDNS）直连二维码
   tarobot devices pending               查看等待批准的设备
   tarobot devices approve 12345678      核对新设备显示的 8 位码后批准
 
@@ -226,7 +227,7 @@ export const HOST_CLI_HELP = `TaroBird — 同一台主机，桌面与命令行�
   devices rename ID --name N           修改此主机上的设备名称
                                       本机桌面端共用主机名称，请用 name <名称>
                                       撤销已入网设备会同步全网，不会让主机退出组网
-  pair [--lan | --tailscale | --routes FILE] [--address IP] [--out FILE] [--wait SECONDS]
+  pair [--lan | --tailscale | --ipv6-ddns | --routes FILE] [--address IP] [--out FILE] [--wait SECONDS]
     需运行新版主机并登记 CLI 控制器（tarobot enroll）；生成 5 分钟有效、仅限一台新设备的邀请。
   network status | create --name N | routes --from FILE --yes
   network local [--tailscale] [--json] 只读查看本机局域网/Tailscale 线路与共享线路
@@ -253,7 +254,7 @@ Google 文档工具：tarobot gdocs --help（导入 OAuth 配置、授权、查�
 通用选项：--state-dir PATH（显式选择独立主机） --json --help
 默认与桌面版共用数据目录；不会自动合并旧 ~/.cctb/hub。
 引擎：codex、claude、antigravity、kimi、deepseek、pi；须在此主机同一用户下安装并登录。
-跨网络使用现有 VPS 中转或 Tailscale；pair --routes 只分享已配置线路，不部署中转。
+跨网络可使用 IPv6（DDNS）直连、VPS 中转或 Tailscale。pair --routes 只分享已配置线路。
 手机配对不等于主机加入组网；network 命令保留签名审批与独立手机归属。
 多网卡配对需用 --address 选择地址；Tailscale 双栈默认使用唯一 IPv4，可显式选择 IPv6。
 配对不会修改组网共享线路。
@@ -292,7 +293,7 @@ export async function runHostCli(argv: string[]): Promise<void> {
     days: { type: "string" }, mode: { type: "string" }, adapter: { type: "string" }, "threshold-seconds": { type: "string" }, enabled: { type: "string" }, engine: { type: "string" }, model: { type: "string" }, effort: { type: "string" }, workspace: { type: "string" }, permission: { type: "string" },
     "request-id": { type: "string" }, "expected-name": { type: "string" }, yes: { type: "boolean" }, force: { type: "boolean" }, abandon: { type: "boolean" },
     wait: { type: "string" }, from: { type: "string" }, out: { type: "string" }, routes: { type: "string" },
-    lan: { type: "boolean" }, tailscale: { type: "boolean" }, address: { type: "string" }, reset: { type: "boolean" },
+    lan: { type: "boolean" }, tailscale: { type: "boolean" }, "ipv6-ddns": { type: "boolean" }, address: { type: "string" }, reset: { type: "boolean" },
     role: { type: "string" }, "dispatch-mode": { type: "string" }, "max-concurrent": { type: "string" }, allow: { type: "string" }, assist: { type: "string" }, status: { type: "string" }, note: { type: "string" }, open: { type: "boolean" }, match: { type: "string" }, offset: { type: "string" },
     folder: { type: "string" }, "new-folder": { type: "string" }, unfiled: { type: "boolean" }, "dry-run": { type: "boolean" }, revision: { type: "string" }, receipt: { type: "string" },
     "html-file": { type: "string" }, "report-file": { type: "string" }, title: { type: "string" }, summary: { type: "string" },
@@ -323,7 +324,7 @@ export async function runHostCli(argv: string[]): Promise<void> {
     integrations: ["yes", "request-id", "mode", "enabled", "adapter", "threshold-seconds", "revision"], directory: ["from"], init: ["name"], stop: ["wait", "force"], restart: ["wait", "force"], enroll: ["reset", "yes"], name: ["name"], drain: ["wait"],
     service: ["yes"], bots: ["name", "engine", "model", "effort", "workspace", "permission", "request-id", "expected-name", "yes", "revision", "enabled", "role", "dispatch-mode", "max-concurrent", "allow", "from"],
     tickets: ["bot", "match", "offset", "assist", "engine", "title", "text", "text-file", "model", "effort", "force", "status", "note", "open", "request-id", "context-message", "dispatch-mode", "max-concurrent", "allow", "revision"],
-    devices: ["yes", "name"], pair: ["lan", "tailscale", "address", "routes", "out", "wait"], network: ["name", "from", "out", "yes", "tailscale"], update: ["from", "yes", "wait", "dry-run", "revision", "receipt"],
+    devices: ["yes", "name"], pair: ["lan", "tailscale", "ipv6-ddns", "address", "routes", "out", "wait"], network: ["name", "from", "out", "yes", "tailscale"], update: ["from", "yes", "wait", "dry-run", "revision", "receipt"],
     folders: ["enabled", "revision", "unfiled"],
     conversations: ["host", "bot", "source-bot", "ids", "yes", "folder", "new-folder", "unfiled", "revision", "request-id", "model", "thinking", "session"],
     widgets: ["html-file", "report-file", "title", "summary", "request-id", "enabled", "revision"],
@@ -619,7 +620,7 @@ export async function runHostCli(argv: string[]): Promise<void> {
     await output(await hostUpdateStatus(directory)); return;
   }
   if (command === "pair") {
-    if (Number(!!v.lan) + Number(!!v.tailscale) + Number(!!v.routes) > 1) throw new Error("请选择一种配对线路来源。");
+    if ([v.lan, v.tailscale, v["ipv6-ddns"], v.routes].filter(Boolean).length > 1) throw new Error("请选择一种配对线路来源。");
     if (v.address && !v.lan && !v.tailscale) throw new Error("--address 需与 --lan 或 --tailscale 一起使用。");
     const outputFile = v.out ? await open(path.resolve(v.out), "wx", 0o600) : undefined;
     let reserved: Stats | undefined, exported = false;
@@ -658,12 +659,20 @@ export async function runHostCli(argv: string[]): Promise<void> {
       }
       if (!("routes" in configured)) throw new Error("配对线路尚未准备好。");
       routes = routesSchema.parse([configured.routes[0]]);
+    } else if (v["ipv6-ddns"]) {
+      const client = await LocalHostClient.connect(directory);
+      try {
+        const view = await new HostNetwork(client).localRoutes();
+        const entry = view.routes.find(({ source, route }) => source === "managed" && isIpv6DdnsRoute(route));
+        if (!entry) throw new Error("IPv6（DDNS）入口未监听。请检查主机 config.json 中的 ipv6Ddns、TLS 证书和监听端口。");
+        routes = [entry.route];
+      } finally { client.close(); }
     } else if (v.routes) routes = routesSchema.parse(await readJson(v.routes));
     else {
       const client = await LocalHostClient.connect(directory);
       try { routes = (await new HostNetwork(client).view()).host.routes; } finally { client.close(); }
     }
-    if (!routes.length) throw new Error("尚无可分享线路。局域网用 pair --lan；已有 VPS / HTTPS 线路用 --routes FILE。");
+    if (!routes.length) throw new Error("尚无可分享线路。局域网用 pair --lan；IPv6（DDNS）用 pair --ipv6-ddns；已有 VPS / HTTPS 线路用 --routes FILE。");
     const service = await inspectHubService(directory); if (!service.running) throw new Error("请先启动主机。");
     const invitation = await withHostManagement(directory, async management => {
       if (v.lan && management.client.supports("host-routes.select-lan.v1")) {

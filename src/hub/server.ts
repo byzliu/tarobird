@@ -141,7 +141,7 @@ function gatewayWorkbenchMetadata<T extends { workbench?: WorkbenchContext }>(me
 type BotConnection = { designOpen: boolean; nativeInput: boolean; nativeReviewInput: boolean; engineTasks: boolean; piSession: boolean; ws: WebSocket; botId: string; queueCapable: boolean; queuePull: boolean; queueAdvertised: boolean; botMessages: boolean; agentBus: boolean; groupDiscussion: boolean; voicePolicy: boolean; widgetPolicy: boolean; replayQueue: boolean; ready: boolean };
 type Rpc = { resolve: (value: Json) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; ws: WebSocket };
 export interface HubTlsListener { exposure?: ListenerExposure; host: string; port: number; tls: TlsOptions; managed?: boolean }
-export interface HubServerOptions { voiceSettings?: HubVoiceSettings; asrSetup?: QwenAsrSetup; /** Internal lease duration override for isolated tests. */ drainLeaseMs?: number; relaySources?: RelaySources; exposure?: ListenerExposure; maxFileBytes?: number; managedBots?: BotManagerOptions; stateDir: string; host?: string; port?: number; tls?: TlsOptions; instancePort?: number; tlsListeners?: HubTlsListener[]; push?: PushConfig; origins?: string[]; clientDir?: string; googleDocs?: () => Promise<GoogleDocs>; onWarning?: (code: string) => void; networkExchange?: typeof exchangeNetworkPeer }
+export interface HubServerOptions { voiceSettings?: HubVoiceSettings; asrSetup?: QwenAsrSetup; /** Internal lease duration override for isolated tests. */ drainLeaseMs?: number; relaySources?: RelaySources; exposure?: ListenerExposure; maxFileBytes?: number; managedBots?: BotManagerOptions; stateDir: string; host?: string; port?: number; tls?: TlsOptions; instancePort?: number; tlsListeners?: HubTlsListener[]; ipv6Ddns?: { url: string; tls: TlsOptions }; push?: PushConfig; origins?: string[]; clientDir?: string; googleDocs?: () => Promise<GoogleDocs>; onWarning?: (code: string) => void; networkExchange?: typeof exchangeNetworkPeer }
 export class HubServer {
   private readonly relaySources: RelaySources;
   private readonly fragmentSockets = new WeakSet<WebSocket>();
@@ -167,7 +167,7 @@ export class HubServer {
   private readonly networkAbort = new AbortController();
   private networkTick?: Promise<void>;
   private readonly networkSources = new Map<string, { remaining: number; updatedAt: number; until: number }>();
-  private readonly listeners: { server: Server; host: string; port: number; tls: boolean; instance: boolean; managed?: boolean; retired?: boolean; authority?: string }[] = [];
+  private readonly listeners: { server: Server; host: string; port: number; tls: boolean; instance: boolean; managed?: boolean; retired?: boolean; authority?: string; ipv6Ddns?: string }[] = [];
   private readonly listenerStarts = new Map<Server, Promise<void>>();
   readonly remoteScreen: HubRemoteScreen;
   private readonly screenSockets: RemoteScreenSockets;
@@ -333,7 +333,11 @@ export class HubServer {
     this.network = new PrivateNetwork(store, auth, this.profile, {
       exchange: options.networkExchange ?? ((host, request) => exchangeNetworkPeer(host, request, { signal: this.networkAbort.signal })),
     });
-    this.hostRoutes = new HostRoutes({ store, network: this.network, publicKey: auth.publicKey, stateDir: options.stateDir, listeners: () => this.managedListeners() });
+    this.hostRoutes = new HostRoutes({
+      store, network: this.network, publicKey: auth.publicKey, stateDir: options.stateDir,
+      listeners: () => this.managedListeners(),
+      ipv6Ddns: () => this.listeners.find(listener => listener.ipv6Ddns && listener.server.listening)?.ipv6Ddns,
+    });
     const conversationsCreated = (userId: string, conversations: Conversation[]) => {
       for (const conversation of conversations) for (const c of this.clients) if (c.session?.userId === userId && (!conversation.hidden || c.capabilities.includes(DISPATCH_CAPABILITY))) { c.conversationIds.add(conversation.id); this.publishClient(c, { v: 1, type: "conversation.updated", conversation }); }
     };
@@ -381,6 +385,11 @@ export class HubServer {
     this.attachListener(this.http, options.host ?? "127.0.0.1", options.port ?? 0, !!options.tls, !options.tls, options.exposure);
     if (options.tls) this.attachListener(createServer(), "127.0.0.1", options.instancePort ?? 0, false, true);
     for (const listener of options.tlsListeners ?? []) this.attachListener(createTlsServer(listener.tls), listener.host, listener.port, true, false, listener.exposure, listener.managed, listener.managed ? certificateAuthorityFromChain(listener.tls.cert) : undefined);
+    if (options.ipv6Ddns) {
+      const { url, tls } = options.ipv6Ddns;
+      const port = Number(new URL(url).port || 443);
+      this.attachListener(createTlsServer(tls), "::", port, true, false, "public", false, undefined, url);
+    }
     this.disposers.push(store.subscribe((event) => {
       this.trackTask(this.broadcast(event).catch(() => options.onWarning?.("broadcast_failed")));
       // The input is already committed. App projection/read latency or failure
@@ -406,16 +415,16 @@ export class HubServer {
       void this.sweep().catch(() => options.onWarning?.("hub_sweep_failed")).finally(() => { checking = false; });
     }, 500); sweep.unref(); this.disposers.push(() => clearInterval(sweep));
   }
-  private attachListener(server: Server, host: string, port: number, tls: boolean, instance: boolean, exposure?: ListenerExposure, managed = false, authority?: string): void {
+  private attachListener(server: Server, host: string, port: number, tls: boolean, instance: boolean, exposure?: ListenerExposure, managed = false, authority?: string, ipv6Ddns?: string): void {
     assertSafeBind(host, tls, exposure);
-    this.listeners.push({ server, host, port, tls, instance, managed, ...(authority ? { authority } : {}) });
+    this.listeners.push({ server, host, port, tls, instance, managed, authority, ipv6Ddns });
     server.on("connection", (socket) => {
       this.connections.add(socket);
       socket.once("close", () => this.connections.delete(socket));
     });
     server.on("request", (req, res) => {
       if (this.stopping) { res.setHeader("Connection", "close"); this.respondError(res, new HubError("hub_stopping", 503)); return; }
-      const task = this.request(req, res, instance).catch(async (e: unknown) => {
+      const task = this.request(req, res, instance, ipv6Ddns).catch(async (e: unknown) => {
         if (req.url?.startsWith("/api/bot-messages/") || req.url?.startsWith("/api/instance/bot-messages") || req.headers["x-tarobot-message-passport"]) {
           await this.store.audit("bot-message.rejected", null, { stage: "http", reason: e instanceof HubError ? e.code.slice(0, 256) : "invalid_request" });
         }
@@ -425,12 +434,12 @@ export class HubServer {
       void task.finally(() => this.httpTasks.delete(task)).catch(() => this.options.onWarning?.("request_failed"));
     });
     server.on("upgrade", (req, socket, head) => {
-      if (!this.stopping && this.originAllowed(req) && this.screenSockets.handles(req.url ?? "")) {
+      if (!this.stopping && this.originAllowed(req, ipv6Ddns) && this.screenSockets.handles(req.url ?? "")) {
         this.screenSockets.upgrade(req, socket, head, instance && !tls && isLoopback(req.socket.remoteAddress ?? "")); return;
       }
       // A relay arrives from loopback, so the socket address alone cannot
       // distinguish an instance connection from an untrusted remote client.
-      if (this.stopping || !this.originAllowed(req) || !["/ws", "/instance"].includes(req.url ?? "") || (req.url === "/instance" && (!instance || !isLoopback(req.socket.remoteAddress ?? "")))) { socket.destroy(); return; }
+      if (this.stopping || !this.originAllowed(req, ipv6Ddns) || !["/ws", "/instance"].includes(req.url ?? "") || (req.url === "/instance" && (!instance || !isLoopback(req.socket.remoteAddress ?? "")))) { socket.destroy(); return; }
       this.sockets.handleUpgrade(req, socket, head, (ws) => req.url === "/instance" ? this.instanceSocket(ws) : this.clientSocket(ws, this.relaySources.source(req.socket)));
     });
   }
@@ -447,7 +456,7 @@ export class HubServer {
       const failed = (error: Error) => { cleanup(); reject(error); };
       const ready = () => { cleanup(); if (this.stopping || listener.retired) server.close(() => {}); resolve(); };
       server.once("error", failed); server.once("listening", ready);
-      try { server.listen(port, host); } catch (error) { failed(error as Error); }
+      try { server.listen({ host, port, ipv6Only: !!listener.ipv6Ddns }); } catch (error) { failed(error as Error); }
     }).catch(error => {
       // A missing Wi-Fi/VPN address must not take down the local controller,
       // workers or relay. Only additional TLS endpoints may recover later.
@@ -620,10 +629,10 @@ export class HubServer {
     }
     for (const botId of this.bots.keys()) void this.dispatchActions(botId).catch(() => this.options.onWarning?.("action_dispatch_failed"));
   }
-  private originAllowed(req: IncomingMessage): boolean {
+  private originAllowed(req: IncomingMessage, ipv6Ddns?: string): boolean {
     const origin = req.headers.origin;
     if (!origin) return true;
-    return [...this.urls, ...NATIVE_ORIGINS, ...(this.options.origins ?? [])].includes(origin);
+    return origin === ipv6Ddns || [...this.urls, ...NATIVE_ORIGINS, ...(this.options.origins ?? [])].includes(origin);
   }
   private send(ws: WebSocket, value: unknown): Promise<void> {
     const work = writeFrame(ws, value, this.fragmentSockets.has(ws));
@@ -1480,9 +1489,9 @@ export class HubServer {
     if (bucket.remaining < 1) throw new HubError("rate_limited", 429);
     bucket.remaining--;
   }
-  private async request(req: IncomingMessage, res: ServerResponse, instanceAllowed: boolean): Promise<void> {
+  private async request(req: IncomingMessage, res: ServerResponse, instanceAllowed: boolean, ipv6Ddns?: string): Promise<void> {
     const source = this.relaySources.source(req.socket);
-    if (!this.originAllowed(req)) throw new HubError("origin_forbidden", 403);
+    if (!this.originAllowed(req, ipv6Ddns)) throw new HubError("origin_forbidden", 403);
     if (req.headers.origin) { res.setHeader("Access-Control-Allow-Origin", req.headers.origin); res.setHeader("Vary", "Origin"); }
     res.setHeader("Access-Control-Expose-Headers", "ETag, Content-Range, Accept-Ranges, Date");
     if (req.method === "OPTIONS") { res.writeHead(204, { "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS", "Access-Control-Allow-Headers": "Authorization, Content-Type, Range, If-Range", "Access-Control-Max-Age": "600" }); res.end(); return; }

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { hostRoutesViewSchema, type HostRouteNotice, type HostRoutesView } from "../client-protocol/host-routes.js";
 import { isLoopbackOrUnspecified } from "../client-protocol/loopback-address.js";
 import { networkCanonical, sharedRoutesSchema } from "../client-protocol/private-network.js";
-import { routeSchema, type Route } from "../client-protocol/routes.js";
+import { IPV6_DDNS_LABEL, routeSchema, type Route } from "../client-protocol/routes.js";
 import { isTailscaleAddress } from "./network.js";
 import type { PrivateNetwork } from "./private-network.js";
 import { HubError, type HubStore } from "./store.js";
@@ -145,7 +145,7 @@ export function sharedRouteReplacement(shared: readonly Route[], record: HostRou
   return sharedRoutesSchema.parse(shared.map(route => route === direct ? { ...direct, url: entry.route.url } : route));
 }
 
-export type HostRoutesOptions = { store: HubStore; network: PrivateNetwork; publicKey: string; stateDir: string; listeners: () => ManagedListener[]; now?: () => number };
+export type HostRoutesOptions = { store: HubStore; network: PrivateNetwork; publicKey: string; stateDir: string; listeners: () => ManagedListener[]; ipv6Ddns?: () => string | undefined; now?: () => number };
 /** Host-owned route publication for its own owner devices (C3) and its own
  * signed descriptor (B7). Runs only after listener maintenance releases the
  * desktop mutex; performs DB work only and never a network exchange. */
@@ -232,6 +232,13 @@ export class HostRoutes {
     for (const mode of MODES) {
       const entry = record.modes[mode];
       if (enabled[mode] && entry && !routes.some(item => item.route.url === entry.route.url)) routes.push({ source: "managed", route: entry.route });
+    }
+    const ddns = this.options.ipv6Ddns?.();
+    if (ddns) {
+      const entry = { source: "managed" as const, route: { name: "Direct" as const, label: IPV6_DDNS_LABEL, url: ddns } };
+      const sameOrigin = routes.findIndex(item => item.route.url === ddns);
+      if (sameOrigin < 0) routes.push(entry);
+      else routes[sameOrigin] = entry;
     }
     const listening = (mode: HostRouteMode) => listeners.some(listener => listener.listening && managedRouteMode(listener.host) === mode);
     return hostRoutesViewSchema.parse({ v: 1, hostPublicKey: this.options.publicKey, routes,

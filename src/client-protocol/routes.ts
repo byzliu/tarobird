@@ -3,6 +3,7 @@ import { z } from "zod";
 export const MAX_VPS_ROUTES = 8;
 export const MAX_DIRECT_ROUTES = 4;
 export const MAX_LOCAL_ROUTES = MAX_DIRECT_ROUTES + MAX_VPS_ROUTES;
+export const IPV6_DDNS_LABEL = "IPv6 (DDNS)";
 export const routeUrlSchema = z.string().trim().max(2048).url().refine((value) => {
   try {
     const u = new URL(value);
@@ -22,10 +23,11 @@ export const routesSchema = z.array(routeSchema).min(1).max(MAX_VPS_ROUTES + 1).
 /** Client-local candidate list. Do not use in signed directories or v1 QR
  * payloads: older peers require the unchanged single-direct wire schema. */
 export const localRoutesSchema = z.array(routeSchema).min(1).max(MAX_LOCAL_ROUTES).superRefine((routes, ctx) => {
-  if (routes.filter(route => route.name !== "VPS").length > MAX_DIRECT_ROUTES || routes.filter(route => route.name === "VPS").length > MAX_VPS_ROUTES) ctx.addIssue({ code: "custom", message: "At most four LAN/Tailscale routes and eight VPS routes" });
+  if (routes.filter(route => route.name !== "VPS").length > MAX_DIRECT_ROUTES || routes.filter(route => route.name === "VPS").length > MAX_VPS_ROUTES) ctx.addIssue({ code: "custom", message: "At most four direct routes and eight VPS routes" });
   if (new Set(routes.map(route => route.url)).size !== routes.length) ctx.addIssue({ code: "custom", message: "Duplicate route URL" });
 });
 export type Route = z.infer<typeof routeSchema>;
+export function isIpv6DdnsRoute(route: Route): boolean { return route.name === "Direct" && route.label === IPV6_DDNS_LABEL; }
 /** Display order and tie-break only; route type is not evidence of performance. */
 export function orderedRoutes(routes: readonly Route[]): Route[] { return [...routes.filter((r) => r.name !== "VPS"), ...routes.filter((r) => r.name === "VPS")]; }
 /** A client description, not an instruction to provision or migrate the Hub. */

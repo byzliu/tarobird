@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { HOST_ROUTES_PATH, hostRoutesViewSchema } from "../../src/client-protocol/host-routes.js";
 import { isLoopbackOrUnspecified } from "../../src/client-protocol/loopback-address.js";
-import { MAX_VPS_ROUTES } from "../../src/client-protocol/routes.js";
+import { IPV6_DDNS_LABEL, isIpv6DdnsRoute, MAX_VPS_ROUTES } from "../../src/client-protocol/routes.js";
 import type { HubConnection } from "./connection.js";
 import type { Route } from "./storage.js";
 import { anySignal, timeoutSignal } from "./abort-signals.js";
@@ -50,10 +50,10 @@ export function DeviceInviteCode({ connection, localHost, busyChange }: { connec
   // Keep QR v1's bounded relay list, preserving the connection in use first.
   const relays = routes.filter(route => route.name === "VPS").sort((a, b) => Number(b.url === state.route?.url) - Number(a.url === state.route?.url)).slice(0, MAX_VPS_ROUTES);
   const choices = [...directs, ...(relays.length ? [relays[0]!] : [])];
-  const usable = choices.filter(route => prepared?.key === key && route.url === prepared.route.url || !(read?.key === key && read.unavailableNames?.includes(route.name)));
+  const usable = choices.filter(route => isIpv6DdnsRoute(route) || prepared?.key === key && route.url === prepared.route.url || !(read?.key === key && read.unavailableNames?.includes(route.name)));
   const defaults = usable.length ? usable : choices;
-  const chosen = choices.find(route => route.url === selected) ?? defaults.find(route => route.url === state.route?.url) ?? (localHost ? defaults.find(route => route.name === "Direct") : undefined) ?? defaults.find(route => route.name === "Tailscale") ?? defaults[0];
-  const title = (route: Route) => route.name === "Tailscale" ? t("Tailscale") : route.name === "VPS" ? t("VPS 中转") : t("同一局域网");
+  const chosen = choices.find(route => route.url === selected) ?? defaults.find(route => route.url === state.route?.url) ?? (localHost ? defaults.find(route => route.name === "Direct" && !isIpv6DdnsRoute(route)) : undefined) ?? defaults.find(route => route.name === "Tailscale") ?? defaults[0];
+  const title = (route: Route) => isIpv6DdnsRoute(route) ? IPV6_DDNS_LABEL : route.name === "Tailscale" ? t("Tailscale") : route.name === "VPS" ? t("VPS 中转") : t("同一局域网");
   if (configure) return <div className="device-invite"><button type="button" disabled={preparing} onClick={() => { setConfigure(false); setRetry(value => value + 1); }}>{t("返回连接二维码")}</button><DesktopHostInvite compact connection={connection} hubKey={key} busyChange={setPreparing} onReady={(route, unavailableRouteCount) => { setPrepared({ key, route, unavailableRouteCount }); setSelected(route.url); setConfigure(false); }}/></div>;
   // The host's own report stays visible, next to the network choice it concerns.
   const unavailableWarning = !prepared && read?.key === key && read.unavailable && <p role="alert" className="settings-warning">{t("主机报告本地线路当前不可用。请检查网络后重新生成，或选择其他可用连接方式。")}</p>;
@@ -61,9 +61,9 @@ export function DeviceInviteCode({ connection, localHost, busyChange }: { connec
     {state.status !== "online" && <p role="status" className="settings-warning">{t("当前主机离线。这里显示的是已保存的连接信息；请先恢复连接，再确认新设备。")}</p>}
     {!prepared && read?.key === key && read.selectionRequired && <p role="status" className="settings-note">{t("这台主机有多个局域网地址。请在主机电脑选择新设备所在的网络，再生成连接二维码。")}</p>}
     {loading ? <p role="status">{t("正在读取可用的连接二维码…")}</p> : failed ? <div role="alert"><p>{t("未能读取主机的连接信息，请重试。现有连接不会改变。")}</p><button type="button" onClick={() => setRetry(value => value + 1)}>{t("重试")}</button></div> : chosen ? <>
-      <div className="device-invite-route">{choices.length > 1 ? <label>{t("新设备通过什么网络连接？")}<select value={chosen.url} onChange={event => setSelected(event.target.value)}>{choices.map(route => <option key={route.url} value={route.url}>{title(route)}{choices.filter(other => other.name === route.name).length > 1 ? ` · ${new URL(route.url).hostname}` : ""}</option>)}</select></label> : <strong>{title(chosen)}</strong>}{unavailableWarning}</div>
+      <div className="device-invite-route">{choices.length > 1 ? <label>{t("新设备通过什么网络连接？")}<select value={chosen.url} onChange={event => setSelected(event.target.value)}>{choices.map(route => <option key={route.url} value={route.url}>{title(route)}{choices.filter(other => title(other) === title(route)).length > 1 ? ` · ${new URL(route.url).hostname}` : ""}</option>)}</select></label> : <strong>{title(chosen)}</strong>}{unavailableWarning}</div>
       <ConnectionInviteCode connection={connection} payload={connectionPairingPayload(key, chosen.name === "VPS" ? relays : [chosen, ...relays], connection.identity.deployment, chosen.url)}/>
-      <p className="settings-note device-invite-note">{chosen.name === "Tailscale" ? t("新设备和主机都需开启 Tailscale，并允许互相访问。") : chosen.name === "VPS" ? t("新设备联网即可通过已配置的中转连接主机。") : t("新设备与主机需连接同一 Wi-Fi 或局域网。")} {t("扫码后仍需核对 8 位配对码并确认，才会授权新设备。")}</p>
+      <p className="settings-note device-invite-note">{isIpv6DdnsRoute(chosen) ? t("新设备的网络需要支持 IPv6。") : chosen.name === "Tailscale" ? t("新设备和主机都需开启 Tailscale，并允许互相访问。") : chosen.name === "VPS" ? t("新设备联网即可通过已配置的中转连接主机。") : t("新设备与主机需连接同一 Wi-Fi 或局域网。")} {t("扫码后仍需核对 8 位配对码并确认，才会授权新设备。")}</p>
     </> : <>
       {unavailableWarning}
       <p className="settings-note">{localHost ? t("首次设置：选择连接方式并生成二维码。") : t("此主机尚未提供可分享的连接地址。请在主机电脑打开「添加设备」，生成连接二维码。")}</p>

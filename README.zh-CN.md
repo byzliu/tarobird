@@ -275,22 +275,29 @@ flowchart TB
     direction LR
     phone3("手机") <--> vps("VPS<br/>只做中转") <--> host3("电脑<br/>运行 Bot")
   end
+  subgraph ddns["04 · IPv6（DDNS）· 异地连接"]
+    direction LR
+    phone4("手机") <-->|"IPv6 HTTPS"| host4("电脑<br/>DDNS 域名")
+  end
   lan ~~~ tailscale
   tailscale ~~~ relay
+  relay ~~~ ddns
   classDef device fill:#f6f6f5,stroke:#b6bab7,color:#27312e
   classDef host fill:#fff1e4,stroke:#caa17c,color:#503b2a
   classDef relayNode fill:#edf3ee,stroke:#92a795,color:#304e39
-  class phone1,phone2,phone3 device
-  class host1,host2,host3 host
+  class phone1,phone2,phone3,phone4 device
+  class host1,host2,host3,host4 host
   class vps relayNode
   style lan fill:transparent,stroke:#b6bab7,rx:8,ry:8
   style tailscale fill:transparent,stroke:#b6bab7,rx:8,ry:8
   style relay fill:transparent,stroke:#b6bab7,rx:8,ry:8
+  style ddns fill:transparent,stroke:#b6bab7,rx:8,ry:8
 ```
 
 | 方式 | 适用场景 | 准备工作 |
 | :--- | :--- | :--- |
 | **局域网直连（LAN）** | 手机与电脑连接同一 Wi-Fi，或位于可互通的局域网 | 无需额外网络服务；两台设备需能互相访问 |
+| **[IPv6（DDNS）直连](docs/client/ipv6-ddns.md)** | 外出使用，客户端所在网络支持 IPv6 | 主机有公网 IPv6，配置 DDNS AAAA 记录、HTTPS 证书和 TCP 入站端口 |
 | **Tailscale 异地连接** | 外出使用，且两端均可安装 Tailscale | 电脑与手机加入同一 Tailscale 网络，无需自建 VPS |
 | **VPS 中转** | 外出使用，手机无需安装 VPN | 一台云服务器，推荐交由 AI 部署 |
 

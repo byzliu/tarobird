@@ -7,6 +7,7 @@ import type { ViteDevServer } from "vite";
 import { desktopTls } from "../../src/hub/desktop-tls.js";
 import { HOST_ROUTES_PATH } from "../../src/client-protocol/host-routes.js";
 import { isLoopbackOrUnspecified } from "../../src/client-protocol/loopback-address.js";
+import { IPV6_DDNS_LABEL } from "../../src/client-protocol/routes.js";
 import { parsePairingLink, type PairingPayload } from "../src/pairing-link.js";
 import type { HostSpec } from "./fixtures/device-invite.js";
 import { createServer } from "./fixtures/vite.js";
@@ -70,6 +71,21 @@ async function codeShown(page: Page): Promise<boolean> {
 }
 const managed = (route: { name: "Direct" | "Tailscale" | "VPS"; url: string; certificateAuthority?: string }) => ({ source: "managed" as const, route });
 const shared = (route: { name: "Direct" | "Tailscale" | "VPS"; url: string; certificateAuthority?: string }) => ({ source: "shared" as const, route });
+
+test("selects the IPv6 DDNS origin without dropping the VPS fallback", async ({ page }) => {
+  const ddns = { name: "Direct" as const, label: IPV6_DDNS_LABEL, url: "https://hub.example.test:8443" };
+  await add(page, "L", { key: keyA, identityRoutes: [{ name: "Direct", url: "http://127.0.0.1:8787" }],
+    view: { routes: [managed({ name: "Direct", url: lan, certificateAuthority: ca }), managed({ name: "Tailscale", url: tailnet, certificateAuthority: ca }), managed(ddns), shared({ name: "VPS", url: relay })],
+      lan: { enabled: true, listening: false }, tailscale: { enabled: true, listening: true } } });
+  await page.setViewportSize({ width: 360, height: 720 });
+  await show(page, "L", true);
+  const choice = page.getByRole("combobox", { name: "新设备通过什么网络连接？" });
+  await expect(choice.getByRole("option")).toHaveText(["同一局域网", "Tailscale", IPV6_DDNS_LABEL, "VPS 中转"]);
+  await choice.selectOption({ label: IPV6_DDNS_LABEL });
+  await expect(page.getByText(/新设备的网络需要支持 IPv6/)).toBeVisible();
+  await expect.poll(() => scanned(page).then(payload => payload.routes)).toEqual([ddns, { name: "VPS", url: relay }]);
+  await onlyRead(page, "L");
+});
 
 test("a paired phone shows the host's current address at once, and copying gives the same code", async ({ page }) => {
   await add(page, "A", { key: keyA, identityRoutes: [{ name: "Direct", url: lan }, { name: "VPS", url: relay }],
