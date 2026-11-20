@@ -1508,6 +1508,18 @@
           "fingerprint": "d2a4c7100116c273732bd68f5fc6f61ba55591215158ab88b06927b0c899d454"
         }
       ]
+    },
+    {
+      "path": "client/e2e/fixtures/device-invite.tsx",
+      "sha256": "8232b963f9072c8c070661129f838e4aed681edaeedc44af7cfe173b163f4357",
+      "reviewer": "codex",
+      "note": "Reviewed the unchanged synthetic Tailscale values. The fixture now accepts both supported owner route paths.",
+      "findings": [
+        {
+          "kind": "non-example-public-ip",
+          "fingerprint": "d2a4c7100116c273732bd68f5fc6f61ba55591215158ab88b06927b0c899d454"
+        }
+      ]
     }
   ]
 }

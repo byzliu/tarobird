@@ -8,7 +8,7 @@ import { HubHttpError } from "../../src/http-error.js";
 import type { HubConnection } from "../../src/connection.js";
 import { DeviceInviteCode } from "../../src/DeviceInviteCode.js";
 import { setLocale } from "../../src/i18n.js";
-import { HOST_INVITE_ROUTES_PATH } from "../../../src/client-protocol/host-routes.js";
+import { HOST_INVITE_ROUTES_PATH, HOST_ROUTES_PATH } from "../../../src/client-protocol/host-routes.js";
 import "../../src/styles.css";
 import "../../src/brand-theme.css";
 import "../../src/palette-tokens.css";
@@ -100,7 +100,7 @@ function fake(label: string, spec: HostSpec): Fake {
         const item = invites.get(JSON.parse(String(init.body)).id); if (item) item.state = "closed";
         return item ? { id: item.id, state: item.state, createdAt: item.createdAt, expiresAt: item.expiresAt } : {};
       }
-      if (path !== HOST_INVITE_ROUTES_PATH) throw new HubHttpError(404, "not_found");
+      if (path !== HOST_INVITE_ROUTES_PATH && path !== HOST_ROUTES_PATH) throw new HubHttpError(404, "not_found");
       if (hold) await new Promise<void>(resolve => waiting.push(resolve));
       if (failures > 0) { failures--; throw new HubHttpError(503, "host_routes_unavailable"); }
       const view = spec.view ?? { routes: [] };
