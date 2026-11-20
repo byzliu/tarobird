@@ -23,7 +23,7 @@ export async function verifyElectronShell({ resources, frontend, version, commit
   const shipped = listPackage(archive).map(name => name.replaceAll('\\', '/')).filter(name => name.startsWith('/dist/'));
   const shippedFiles = shipped.filter(name => !shipped.some(other => other.startsWith(`${name}/`))).map(name => name.slice(6)).sort();
   if (JSON.stringify(shippedFiles) !== JSON.stringify(files.sort())) throw new Error('Electron frontend inventory differs');
-  for (const file of files) if (!extractFile(archive, `dist/${file}`).equals(await readFile(path.join(frontend, file)))) throw new Error(`Electron frontend bytes differ: ${file}`);
+  for (const file of files) if (!extractFile(archive, path.join('dist', file)).equals(await readFile(path.join(frontend, file)))) throw new Error(`Electron frontend bytes differ: ${file}`);
   for (const entry of ['main.mjs', 'preload.cjs']) if (!extractFile(archive, entry).length) throw new Error('Electron bootstrap missing');
   let badge;
   try { badge = extractFile(archive, 'windows-unread-badges.png'); }
