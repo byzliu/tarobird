@@ -94,10 +94,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run desktop:windows --prefix client -- --arch ${{ inputs.arch }} --signed-updates
-      - name: Packaged host end-to-end smoke
-        run: client/src-tauri/host/node.exe scripts/verify-desktop-host.mjs client/src-tauri/host
-      - name: Windows host control and engine discovery
-        run: npx vitest run tests/windows-host.test.ts tests/deepseek-windows-discovery.test.ts tests/deepseek-windows-installation.test.ts tests/deepseek-desktop-launcher.test.ts tests/windows-state-sync.test.ts tests/host-cli-package.test.ts
       - name: Final installer runtime dependencies
         shell: pwsh
         run: |
@@ -107,6 +103,30 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Installer extraction failed" }
           node scripts/verify-windows-runtime.mjs windows-installer-extracted
           if ($LASTEXITCODE -ne 0) { throw "Installer requires an unbundled runtime" }
+      - name: Installer checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem "$env:TAROBOT_DESKTOP_OUTPUT/*-setup.exe"
+          if (-not $files) { throw "No Windows installer was produced" }
+          $files | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)" | Set-Content -Encoding ascii "$($_.FullName).sha256"
+          }
+      # Preserve the verified unsigned candidate for troubleshooting and trial
+      # while the disposable installer acceptance runs. Signed release
+      # publication still requires the entire Windows job to succeed.
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.signed_updates }}
+        with:
+          name: TaroBird-windows-${{ inputs.arch }}-unsigned
+          path: |
+            ${{ runner.temp }}/tarobot-electron-output.noindex/*-setup.exe
+            ${{ runner.temp }}/tarobot-electron-output.noindex/*.sha256
+          if-no-files-found: error
+      - name: Packaged host end-to-end smoke
+        run: client/src-tauri/host/node.exe scripts/verify-desktop-host.mjs client/src-tauri/host
+      - name: Windows host control and engine discovery
+        run: npx vitest run tests/windows-host.test.ts tests/deepseek-windows-discovery.test.ts tests/deepseek-windows-installation.test.ts tests/deepseek-desktop-launcher.test.ts tests/windows-state-sync.test.ts tests/host-cli-package.test.ts
       - name: Native Rust regressions on the x64 runner
         if: inputs.arch == 'x64'
         shell: pwsh
@@ -179,15 +199,6 @@ jobs:
             ${{ runner.temp }}/windows-persisted-migration.noindex/*.json
             ${{ runner.temp }}/windows-persisted-migration.noindex/*.log
           if-no-files-found: warn
-      - name: Installer checksums
-        shell: pwsh
-        run: |
-          $files = Get-ChildItem "$env:TAROBOT_DESKTOP_OUTPUT/*-setup.exe"
-          if (-not $files) { throw "No Windows installer was produced" }
-          $files | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            "$hash  $($_.Name)" | Set-Content -Encoding ascii "$($_.FullName).sha256"
-          }
       - name: Verify signed installer and stage private update assets
         if: inputs.signed_updates
         env:
@@ -202,14 +213,6 @@ jobs:
           New-Item -ItemType Directory -Path test-results/windows-signed -Force | Out-Null
           Copy-Item -LiteralPath $files[0].FullName -Destination test-results/windows-signed
           Copy-Item -LiteralPath ($files[0].FullName + '.sig') -Destination test-results/windows-signed
-      - uses: actions/upload-artifact@v4
-        if: ${{ !inputs.signed_updates }}
-        with:
-          name: TaroBird-windows-${{ inputs.arch }}-unsigned
-          path: |
-            ${{ runner.temp }}/tarobot-electron-output.noindex/*-setup.exe
-            ${{ runner.temp }}/tarobot-electron-output.noindex/*.sha256
-          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: inputs.signed_updates
         with:
